@@ -97,7 +97,7 @@ on:
       hostname:
         description: "主机名"
         required: false
-        default: "armbian"
+        default: "debian"
         type: string
 
       timezone:
@@ -192,18 +192,44 @@ jobs:
           ROOT_PASSWORD:  ${{ inputs.root_password }}
           HOSTNAME_VAL:   ${{ inputs.hostname }}
           TZ_VAL:         ${{ inputs.timezone }}
+          ROOTFS_URL:     ${{ inputs.rootfs_url }}
         run: |
           set -euo pipefail
 
-          sudo update-binfmts --enable qemu-aarch64
-
-          echo "▶ debootstrap 第一阶段..."
           sudo mkdir -p "${ROOTFS_DIR}"
-          sudo debootstrap --arch=arm64 --foreign --include=ca-certificates             "${DEBIAN_RELEASE}" "${ROOTFS_DIR}" "${DEBIAN_MIRROR}/"
-          sudo cp /usr/bin/qemu-aarch64-static "${ROOTFS_DIR}/usr/bin/"
 
-          echo "▶ debootstrap 第二阶段..."
-          sudo chroot "${ROOTFS_DIR}" /debootstrap/debootstrap --second-stage
+          # ── 如果提供了 rootfs_url，直接下载解压，跳过 debootstrap ──────────
+          if [[ -n "${ROOTFS_URL}" ]]; then
+            echo "▶ 使用已有 rootfs：${ROOTFS_URL}"
+            ROOTFS_ARCHIVE="/tmp/rootfs_input.tar.gz"
+            wget -q --show-progress -O "${ROOTFS_ARCHIVE}" "${ROOTFS_URL}" \
+              || { echo "::error::rootfs 下载失败：${ROOTFS_URL}"; exit 1; }
+
+            # 自动识别压缩格式（.tar.gz / .tar.xz / .tar.zst / .tar.lz4）
+            echo "▶ 解压 rootfs..."
+            sudo tar -xf "${ROOTFS_ARCHIVE}" -C "${ROOTFS_DIR}" \
+              || { echo "::error::rootfs 解压失败，请确认是合法的 tar 归档"; exit 1; }
+            rm -f "${ROOTFS_ARCHIVE}"
+
+            # 基础校验：确认解压出了最基本的目录结构
+            for _dir in etc usr bin; do
+              [[ -d "${ROOTFS_DIR}/${_dir}" ]] \
+                || { echo "::error::rootfs 缺少 /${_dir}，归档可能有误"; exit 1; }
+            done
+            echo "▶ rootfs 校验通过，跳过 debootstrap"
+
+          else
+            # ── 正常 debootstrap 流程 ───────────────────────────────────────
+            sudo update-binfmts --enable qemu-aarch64
+
+            echo "▶ debootstrap 第一阶段..."
+            sudo debootstrap --arch=arm64 --foreign --include=ca-certificates \
+              "${DEBIAN_RELEASE}" "${ROOTFS_DIR}" "${DEBIAN_MIRROR}/"
+            sudo cp /usr/bin/qemu-aarch64-static "${ROOTFS_DIR}/usr/bin/"
+
+            echo "▶ debootstrap 第二阶段..."
+            sudo chroot "${ROOTFS_DIR}" /debootstrap/debootstrap --second-stage
+          fi
 
           # apt 源
           printf 'deb %s/ %s main contrib non-free non-free-firmware\n'             "${DEBIAN_MIRROR}" "${DEBIAN_RELEASE}" | sudo tee "${ROOTFS_DIR}/etc/apt/sources.list" > /dev/null
