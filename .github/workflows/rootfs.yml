@@ -224,10 +224,6 @@ jobs:
             sudo sed -i "s|^#*DefaultTimeoutStopSec.*|DefaultTimeoutStopSec=10s|g"   "${SYS_CONF}"
           } || true
 
-          # ── shell 环境（ls/ll alias + 彩色 PS1）─────────────────────
-          echo 'CmlmIFsgLXggL3Vzci9iaW4vZGlyY29sb3JzIF07IHRoZW4KICAgIGV2YWwgIlwkKGRpcmNvbG9ycyAtYikiCiAgICBhbGlhcyBscz0nbHMgLS1jb2xvcj1hdXRvJwogICAgYWxpYXMgbGw9J2xzIC1saCAtLWNvbG9yPWF1dG8nCiAgICBhbGlhcyBncmVwPSdncmVwIC0tY29sb3I9YXV0bycKZmkKUFMxPSdcW1xlWzE7MzJtXF1cdUBcaFxbXGVbMG1cXTpcW1xlWzE7MzRtXF1cd1xbXGVbMG1cXVwkICcK' \
-            | base64 -d | sudo tee -a "${ROOTFS_DIR}/root/.bashrc" > /dev/null
-
           # ── rc.local ──────────────────────────────────────────────────
           if [[ ! -f "${ROOTFS_DIR}/etc/rc.local" ]]; then
             printf '#!/bin/sh -e\nexit 0\n' | sudo tee "${ROOTFS_DIR}/etc/rc.local" > /dev/null
