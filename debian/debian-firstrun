@@ -1,0 +1,119 @@
+#!/bin/bash
+#==============================================================================
+# 功能：首次启动初始化（仅执行一次）
+#   1. 重新生成 SSH host keys（确保每台设备唯一）
+#   2. 以太网 MAC 地址随机化（避免同镜像多设备冲突）
+# 说明：执行完成后 systemd 服务自动 disable，不再运行
+#==============================================================================
+
+set -euo pipefail
+
+LOG="/var/log/debian-firstrun.log"
+touch "${LOG}"
+chmod 644 "${LOG}"
+
+log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG}"; }
+
+log "=== debian-firstrun 开始 ==="
+log "内核: $(uname -r) | 架构: $(uname -m)"
+
+# ── 1. 重新生成 SSH host keys ─────────────────────────────────────────────────
+log "--- 重新生成 SSH host keys ---"
+
+if [[ -d /etc/ssh ]]; then
+    # 记录熵值（用于诊断）
+    entropy_before="$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || echo unknown)"
+
+    # 删除旧 key
+    rm -f /etc/ssh/ssh_host_*
+
+    # 重新生成所有类型的 key
+    dpkg-reconfigure openssh-server >/dev/null 2>&1 || \
+        ssh-keygen -A >/dev/null 2>&1 || true
+
+    entropy_after="$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || echo unknown)"
+    log "SSH host keys 已重新生成（熵: ${entropy_before} → ${entropy_after}）"
+
+    # 重启 SSH 服务使新 key 生效
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+    log "SSH 服务已重启"
+else
+    log "未找到 /etc/ssh 目录，跳过 SSH key 生成"
+fi
+
+# ── 2. 以太网 MAC 地址随机化 ──────────────────────────────────────────────────
+log "--- 以太网 MAC 地址随机化 ---"
+
+# 生成本地管理 MAC（Locally Administered Address，不与真实网卡冲突）
+generate_random_mac() {
+    # 第一个字节：02/06/0A/0E（bit0=0 单播，bit1=1 本地管理）
+    local prefixes=("02" "06" "0A" "0E")
+    local idx=$(( RANDOM % 4 ))
+    printf '%s:%02X:%02X:%02X:%02X:%02X' \
+        "${prefixes[$idx]}" \
+        $(( RANDOM % 256 )) $(( RANDOM % 256 )) \
+        $(( RANDOM % 256 )) $(( RANDOM % 256 )) \
+        $(( RANDOM % 256 ))
+}
+
+# 找到所有以太网接口（eth*、end*、enp*、wan、lan 等，排除 lo 和虚拟接口）
+eth_ifaces="$(ip link show 2>/dev/null | awk -F': ' '/^[0-9]+:/{print $2}' | \
+    grep -E '^(eth|end|enp|eno|wan|lan)' || true)"
+
+if [[ -z "${eth_ifaces}" ]]; then
+    log "未找到以太网接口，跳过 MAC 随机化"
+else
+    # 使用 NetworkManager keyfile 持久化 MAC
+    NM_DIR="/etc/NetworkManager/system-connections"
+    mkdir -p "${NM_DIR}"
+
+    for iface in ${eth_ifaces}; do
+        MAC="$(generate_random_mac)"
+        CONF_FILE="${NM_DIR}/ethernet-${iface}.nmconnection"
+
+        # 如果已有连接配置则跳过（避免覆盖用户设置）
+        if [[ -f "${CONF_FILE}" ]]; then
+            log "${iface}: 已有 NM 连接配置，跳过"
+            continue
+        fi
+
+        cat > "${CONF_FILE}" << EOF
+[connection]
+id=ethernet-${iface}
+type=ethernet
+interface-name=${iface}
+autoconnect=true
+
+[ethernet]
+cloned-mac-address=${MAC}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+addr-gen-mode=stable-privacy
+EOF
+        chmod 600 "${CONF_FILE}"
+        log "${iface}: MAC 已设置为 ${MAC}"
+    done
+
+    # 重载 NetworkManager 使配置生效
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        nmcli connection reload 2>/dev/null || true
+        log "NetworkManager 配置已重载"
+    fi
+fi
+
+# ── 3. 写入唯一 UUID ───────────────────────────────────────────────────────────
+log "--- 写入安装 UUID ---"
+if [[ -f /etc/debian-release ]] && ! grep -q "^INSTALL_UUID=" /etc/debian-release; then
+    INSTALL_UUID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+    [[ -n "${INSTALL_UUID}" ]] && \
+        echo "INSTALL_UUID=\"${INSTALL_UUID}\"" >> /etc/debian-release && \
+        log "UUID: ${INSTALL_UUID}"
+fi
+
+# ── 完成，disable 自身 ────────────────────────────────────────────────────────
+log "=== debian-firstrun 完成，服务已禁用 ==="
+systemctl disable debian-firstrun.service 2>/dev/null || true

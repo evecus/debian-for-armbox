@@ -1,0 +1,229 @@
+#!/bin/bash
+#==============================================================================
+# 功能：Debian 系统内核升级脚本
+# 用法：kernel-update [-k 6.12.74] [-u stable] [-r ophub/kernel] [-b yes/no]
+# 说明：不依赖 /etc/ophub-release 和 armbian-update
+#==============================================================================
+
+set -euo pipefail
+
+RELEASE_FILE="/etc/debian-release"
+
+STEPS="[\033[95m STEPS \033[0m]"
+INFO="[\033[94m INFO  \033[0m]"
+SUCCESS="[\033[92m SUCCESS \033[0m]"
+ERROR="[\033[91m ERROR \033[0m]"
+
+error_msg() { echo -e "${ERROR} ${1}"; exit 1; }
+info_msg()  { echo -e "${INFO} ${1}"; }
+
+[[ "$(id -u)" != "0" ]] && error_msg "请用 root 运行: sudo $0"
+
+# ── 读取配置 ──────────────────────────────────────────────────────────────────
+[[ -f "${RELEASE_FILE}" ]] || error_msg "缺少配置文件 [ ${RELEASE_FILE} ]，请重新烧录镜像。"
+source "${RELEASE_FILE}"
+
+PLATFORM="${PLATFORM:-}"
+KERNEL_TAGS="${KERNEL_TAGS:-stable}"
+KERNEL_REPO="${KERNEL_REPO:-ophub/kernel}"
+KERNEL_BACKUP="${KERNEL_BACKUP:-yes}"
+
+[[ -z "${PLATFORM}" ]] && error_msg "[ ${RELEASE_FILE} ] 中缺少 PLATFORM 变量。"
+
+# ── 解析参数 ──────────────────────────────────────────────────────────────────
+inputs_kernel=""
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -k) inputs_kernel="${2}"; shift 2 ;;
+        -u) KERNEL_TAGS="${2}";   shift 2 ;;
+        -r) KERNEL_REPO="${2}";   shift 2 ;;
+        -b) KERNEL_BACKUP="${2}"; shift 2 ;;
+        -h|--help)
+            echo "用法: $(basename $0) [-k 内核版本] [-u stable|rk35xx|flippy] [-r 仓库] [-b yes|no]"
+            echo "例如: $(basename $0) -k 6.12.74 -u rk35xx"
+            echo "      $(basename $0) -k 6.1.y    # 自动获取该系列最新版"
+            echo "      $(basename $0)              # 自动获取当前系列最新版"
+            exit 0 ;;
+        *) error_msg "未知参数: ${1}" ;;
+    esac
+done
+
+kernel_api="https://github.com/${KERNEL_REPO}"
+
+# ── 检查依赖 ──────────────────────────────────────────────────────────────────
+echo -e "${STEPS} 检查依赖..."
+missing_pkgs=()
+for pkg in curl tar u-boot-tools; do
+    dpkg -l "${pkg}" &>/dev/null || missing_pkgs+=("${pkg}")
+done
+if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+    info_msg "安装缺失依赖: ${missing_pkgs[*]}"
+    apt-get update -qq && apt-get install -y "${missing_pkgs[@]}"
+fi
+
+# ── 检查网络 ──────────────────────────────────────────────────────────────────
+echo -e "${STEPS} 检查网络..."
+curl --connect-timeout 10 -s "https://github.com" >/dev/null 2>&1 \
+    || error_msg "无法访问 github.com，请检查网络。"
+info_msg "网络正常。"
+
+# ── 查询版本 ──────────────────────────────────────────────────────────────────
+echo -e "${STEPS} 查询内核版本..."
+
+current_kernel="$(uname -r)"
+current_kernel_short="$(echo "${current_kernel}" | grep -oE '^[1-9]\.[0-9]{1,3}\.[0-9]+')"
+
+# 处理版本参数格式：6.1 → 6.1.y
+if [[ -n "${inputs_kernel}" ]]; then
+    [[ "${inputs_kernel: -1}" == "." ]] && inputs_kernel="${inputs_kernel}y"
+    [[ "$(grep -o '\.' <<< "${inputs_kernel}" | wc -l)" -eq 1 ]] && inputs_kernel="${inputs_kernel}.y"
+fi
+
+# 系列查询（空或 x.y.y 格式）→ 自动获取最新
+if [[ -z "${inputs_kernel}" ]] || [[ "${inputs_kernel}" =~ ^[0-9]+\.[0-9]+\.y$ ]]; then
+    if [[ -n "${inputs_kernel}" ]]; then
+        kernel_verpatch="${inputs_kernel%.*}"
+    else
+        kernel_verpatch="$(echo "${current_kernel_short}" | awk -F'.' '{print $1"."$2}')"
+    fi
+
+    info_msg "查询 [ ${kernel_verpatch} ] 系列在 [ kernel_${KERNEL_TAGS} ] 中的最新版本..."
+    latest_version="$(
+        curl -fsSL "${kernel_api}/releases/expanded_assets/kernel_${KERNEL_TAGS}" |
+        grep -oE "${kernel_verpatch//./\\.}\\.[0-9]+\\.tar\\.gz" |
+        sed 's/\.tar\.gz//' | sort -urV | head -n 1
+    )"
+    [[ -n "${latest_version}" ]] || error_msg "无法从 [ ${kernel_api} ] 查询到内核版本。"
+    inputs_kernel="${latest_version}"
+fi
+
+info_msg "当前内核: [ ${current_kernel} ]"
+info_msg "目标内核: [ ${inputs_kernel} ]"
+[[ "${current_kernel_short}" == "${inputs_kernel}" ]] && {
+    info_msg "已是最新版本，无需升级。"; exit 0
+}
+
+# ── 下载内核 ──────────────────────────────────────────────────────────────────
+echo -e "${STEPS} 下载内核..."
+
+TMP_DIR="$(mktemp -d)"
+trap "rm -rf ${TMP_DIR}" EXIT
+
+DOWNLOAD_URL="${kernel_api}/releases/download/kernel_${KERNEL_TAGS}/${inputs_kernel}.tar.gz"
+info_msg "下载: ${DOWNLOAD_URL}"
+curl -fsSL --progress-bar "${DOWNLOAD_URL}" -o "${TMP_DIR}/${inputs_kernel}.tar.gz" \
+    || error_msg "下载失败，请检查版本号和标签是否正确。"
+
+tar -xzf "${TMP_DIR}/${inputs_kernel}.tar.gz" -C "${TMP_DIR}" || error_msg "解压失败。"
+KDIR="${TMP_DIR}/${inputs_kernel}"
+
+# ── 获取完整内核签名 ──────────────────────────────────────────────────────────
+KERNEL_NAME="$(ls "${KDIR}"/boot-*.tar.gz 2>/dev/null | head -1 \
+    | sed 's/.*boot-\(.*\)\.tar\.gz/\1/')"
+[[ -z "${KERNEL_NAME}" ]] && error_msg "无法识别内核签名，下载包可能损坏。"
+info_msg "内核签名: [ ${KERNEL_NAME} ]"
+
+[[ "${current_kernel}" == "${KERNEL_NAME}" ]] && {
+    info_msg "该内核已安装，无需升级。"; exit 0
+}
+
+# ── sha256 校验 ───────────────────────────────────────────────────────────────
+if [[ -f "${KDIR}/sha256sums" ]]; then
+    echo -e "${STEPS} 校验文件完整性..."
+    cd "${KDIR}"
+    sha256sum --check sha256sums --ignore-missing || error_msg "sha256 校验失败。"
+    info_msg "校验通过。"
+fi
+
+# ── 备份当前内核 ──────────────────────────────────────────────────────────────
+if [[ "${KERNEL_BACKUP}" != "no" ]]; then
+    echo -e "${STEPS} 备份当前内核..."
+    BACKUP_DIR="/ddbr/backup/${current_kernel}"
+    mkdir -p "${BACKUP_DIR}/boot" "${BACKUP_DIR}/modules"
+    for f in /boot/{uInitrd,*Image,dtb,config-*,System.map-*,vmlinuz-*,initrd.img-*}; do
+        [[ -e "${f}" ]] && cp -rf "${f}" "${BACKUP_DIR}/boot/" 2>/dev/null || true
+    done
+    [[ -d "/usr/lib/modules/${current_kernel}" ]] && \
+        cp -rf "/usr/lib/modules/${current_kernel}" "${BACKUP_DIR}/modules/"
+    info_msg "备份完成: [ ${BACKUP_DIR} ]"
+fi
+
+# ── 安装 boot 文件 ────────────────────────────────────────────────────────────
+echo -e "${STEPS} 安装 boot 文件..."
+mkdir -p "${TMP_DIR}/boot"
+tar -xzf "${KDIR}/boot-${KERNEL_NAME}.tar.gz" -C "${TMP_DIR}/boot" \
+    || error_msg "解压 boot 文件失败。"
+
+# 跳过引导脚本，只覆盖内核本体
+for f in "${TMP_DIR}/boot"/*; do
+    fname="$(basename "${f}")"
+    case "${fname}" in
+        s905_autoscript*|emmc_autoscript*|boot.ini*|\
+        boot-emmc.ini*|uEnv.txt|extlinux.conf*|armbianEnv.txt)
+            continue ;;
+    esac
+    cp -rf "${f}" /boot/
+done
+info_msg "boot 文件安装完成。"
+
+# ── 安装 dtb ──────────────────────────────────────────────────────────────────
+echo -e "${STEPS} 安装 dtb..."
+DTB_FILE="${KDIR}/dtb-${PLATFORM}-${KERNEL_NAME}.tar.gz"
+[[ -f "${DTB_FILE}" ]] || error_msg "未找到 dtb: [ dtb-${PLATFORM}-${KERNEL_NAME}.tar.gz ]"
+mkdir -p "${TMP_DIR}/dtb"
+tar -xzf "${DTB_FILE}" -C "${TMP_DIR}/dtb" || error_msg "解压 dtb 失败。"
+mkdir -p "/boot/dtb/${PLATFORM}"
+cp -rf "${TMP_DIR}/dtb/"* "/boot/dtb/${PLATFORM}/" 2>/dev/null || \
+cp -rf "${TMP_DIR}/dtb/"* "/boot/dtb/"
+info_msg "dtb 安装完成。"
+
+# ── 安装 modules ──────────────────────────────────────────────────────────────
+echo -e "${STEPS} 安装 modules..."
+mkdir -p "${TMP_DIR}/modules"
+tar -xzf "${KDIR}/modules-${KERNEL_NAME}.tar.gz" -C "${TMP_DIR}/modules" \
+    || error_msg "解压 modules 失败。"
+MOD_SRC="$(find "${TMP_DIR}/modules" -maxdepth 3 -type d \
+    -name "${KERNEL_NAME}" 2>/dev/null | head -1)"
+[[ -z "${MOD_SRC}" ]] && error_msg "解压后未找到 modules/${KERNEL_NAME} 目录。"
+rm -rf "/usr/lib/modules/${KERNEL_NAME}" 2>/dev/null || true
+cp -rf "${MOD_SRC}" "/usr/lib/modules/"
+info_msg "modules 安装完成。"
+
+# ── 生成 uInitrd ──────────────────────────────────────────────────────────────
+echo -e "${STEPS} 生成 uInitrd..."
+INITRAMFS_CONF="/etc/initramfs-tools/update-initramfs.conf"
+RESTORE_INITRAMFS="no"
+if [[ -f "${INITRAMFS_CONF}" ]] && grep -q "^update_initramfs=no" "${INITRAMFS_CONF}"; then
+    sed -i "s|^update_initramfs=no|update_initramfs=yes|g" "${INITRAMFS_CONF}"
+    RESTORE_INITRAMFS="yes"
+fi
+
+update-initramfs -c -k "${KERNEL_NAME}" || error_msg "生成 initramfs 失败。"
+
+[[ "${RESTORE_INITRAMFS}" == "yes" ]] && \
+    sed -i "s|^update_initramfs=yes|update_initramfs=no|g" "${INITRAMFS_CONF}"
+
+INITRD_FILE="/boot/initrd.img-${KERNEL_NAME}"
+[[ -f "${INITRD_FILE}" ]] || error_msg "未找到 initrd: ${INITRD_FILE}"
+mkimage -A arm64 -O linux -T ramdisk -C gzip -n uInitrd \
+    -d "${INITRD_FILE}" /boot/uInitrd || error_msg "生成 uInitrd 失败。"
+info_msg "uInitrd 生成完成。"
+
+# ── Amlogic 专项处理 ──────────────────────────────────────────────────────────
+if [[ "${PLATFORM}" == "amlogic" ]]; then
+    echo -e "${STEPS} 处理 Amlogic 引导参数..."
+    for script_cmd in /boot/s905_autoscript.cmd /boot/emmc_autoscript.cmd; do
+        [[ -f "${script_cmd}" ]] || continue
+        script_bin="${script_cmd%.cmd}"
+        sed -i "s|^setenv ramdisk_addr_r.*|setenv ramdisk_addr_r 0x15000000|g" "${script_cmd}"
+        sed -i "s|^setenv initrd_addr.*|setenv initrd_addr 0x15000000|g"       "${script_cmd}"
+        rm -f "${script_bin}"
+        mkimage -C none -A arm -T script -d "${script_cmd}" "${script_bin}" >/dev/null
+        info_msg "已更新引导脚本: $(basename ${script_bin})"
+    done
+    [[ -f /boot/boot.ini ]] && \
+        sed -i "s|^setenv initrd_addr.*|setenv initrd_addr 0x15000000|g" /boot/boot.ini
+fi
+
+sync
+echo -e "${SUCCESS} 内核 [ ${KERNEL_NAME} ] 安装成功，请重启系统。"
