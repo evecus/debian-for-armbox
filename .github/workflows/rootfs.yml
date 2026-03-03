@@ -225,6 +225,40 @@ jobs:
             printf '#!/bin/sh -e\nexit 0\n' | sudo tee "${ROOTFS_DIR}/etc/rc.local" > /dev/null
             sudo chmod +x "${ROOTFS_DIR}/etc/rc.local"
           fi
+
+          # ── 注入 armbian 平台脚本 ─────────────────────────────────────────
+          sudo mkdir -p "${ROOTFS_DIR}/usr/lib/armbian"
+          sudo mkdir -p "${ROOTFS_DIR}/etc/default"
+          sudo mkdir -p "${ROOTFS_DIR}/lib/systemd/system"
+
+          # 脚本本体
+          for f in armbian/armbian-common armbian/armbian-firstrun \
+                   armbian/armbian-hardware-optimization \
+                   armbian/armbian-resize-filesystem \
+                   armbian/armbian-zram-config; do
+            sudo cp "${f}" "${ROOTFS_DIR}/usr/lib/armbian/$(basename ${f})"
+          done
+          sudo chmod +x "${ROOTFS_DIR}/usr/lib/armbian/"*
+
+          # /etc/armbian-release
+          sudo cp armbian/armbian-release "${ROOTFS_DIR}/etc/armbian-release"
+
+
+          # systemd service 文件
+          for f in systemd/armbian-firstrun.service \
+                   systemd/armbian-hardware-optimize.service \
+                   systemd/armbian-resize-filesystem.service \
+                   systemd/armbian-zram-config.service; do
+            sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
+          done
+
+          # enable 服务
+          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-firstrun.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-hardware-optimize.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-resize-filesystem.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-zram-config.service
+
+          echo "▶ armbian platform scripts injected"
           
           # ── uInitrd 钩子（让 initramfs-tools 生成 u-boot 兼容格式）──
           # 解码内容：mkimage -A arm64 -O linux -T ramdisk -C gzip ...
