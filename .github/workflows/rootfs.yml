@@ -236,7 +236,7 @@ jobs:
           sudo mkdir -p "${ROOTFS_DIR}/lib/systemd/system"
 
           # 脚本本体
-          for f in debian/debian-common debian/debian-firstrun \
+          for f in debian/debian-firstrun \
                    debian/debian-hardware-optimization \
                    debian/debian-resize-filesystem \
                    debian/debian-zram-config; do
