@@ -17,9 +17,6 @@ case "$1" in
 			echo "### [firstrun] SSH keys regenerated (entropy: ${entropy_before} -> ${entropy_after})" >> "${Log}"
 		fi
 
-		# MAC 地址随机化（rk3566 用 NetworkManager）
-		set_fixed_mac
-
 		# 写入安装 UUID
 		if ! grep -q "^INSTALL_UUID=" /etc/debian-release 2>/dev/null; then
 			UUID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
