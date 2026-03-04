@@ -158,8 +158,8 @@ jobs:
               iproute2 network-manager ifupdown \
               net-tools iputils-ping dnsutils \
               wpasupplicant wireless-tools chrony \
-              bash-completion htop nano vim parted \
-              u-boot-tools initramfs-tools bsdextrautils \
+              bash-completion htop nano vim \
+              u-boot-tools initramfs-tools \
               btrfs-progs e2fsprogs dosfstools \
               lsof file procps cron ntpdate \
               --no-install-recommends
