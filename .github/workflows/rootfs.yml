@@ -28,7 +28,7 @@ on:
       hostname:
         description: "主机名"
         required: false
-        default: "armbian"
+        default: "debian"
         type: string
 
       timezone:
@@ -63,10 +63,6 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event.repository.owner.id == github.event.sender.id }}
 
     steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-  
       # ── 1. 初始化环境 ──────────────────────────────────────────────────
       - name: Initialize environment
         id: init
@@ -92,7 +88,7 @@ jobs:
           # schedule 触发时使用默认值
           echo "DEBIAN_RELEASE=${{ inputs.debian_release || 'bookworm' }}" >> "${GITHUB_ENV}"
           echo "ROOT_PASSWORD=${{ inputs.root_password  || '1234' }}"      >> "${GITHUB_ENV}"
-          echo "HOSTNAME_VAL=${{ inputs.hostname        || 'armbian' }}"   >> "${GITHUB_ENV}"
+          echo "HOSTNAME_VAL=${{ inputs.hostname        || 'debian' }}"   >> "${GITHUB_ENV}"
           echo "TZ_VAL=${{ inputs.timezone              || 'Asia/Shanghai' }}" >> "${GITHUB_ENV}"
           echo "EXTRA_PKGS=${{ inputs.extra_packages    || '' }}"          >> "${GITHUB_ENV}"
           echo "status=success" >> "${GITHUB_OUTPUT}"
@@ -230,39 +226,40 @@ jobs:
             sudo chmod +x "${ROOTFS_DIR}/etc/rc.local"
           fi
 
-          # ── 注入 armbian 平台脚本 ─────────────────────────────────────────
-          sudo mkdir -p "${ROOTFS_DIR}/usr/lib/armbian"
+          # ── 注入 debian 平台脚本 ─────────────────────────────────────────
+          sudo mkdir -p "${ROOTFS_DIR}/usr/lib/debian"
           sudo mkdir -p "${ROOTFS_DIR}/etc/default"
           sudo mkdir -p "${ROOTFS_DIR}/lib/systemd/system"
 
           # 脚本本体
-          for f in armbian/armbian-common armbian/armbian-firstrun \
-                   armbian/armbian-hardware-optimization \
-                   armbian/armbian-resize-filesystem \
-                   armbian/armbian-zram-config; do
-            sudo cp "${f}" "${ROOTFS_DIR}/usr/lib/armbian/$(basename ${f})"
+          for f in debian/debian-common debian/debian-firstrun \
+                   debian/debian-hardware-optimization \
+                   debian/debian-resize-filesystem \
+                   debian/debian-zram-config; do
+            sudo cp "${f}" "${ROOTFS_DIR}/usr/lib/debian/$(basename ${f})"
           done
-          sudo chmod +x "${ROOTFS_DIR}/usr/lib/armbian/"*
+          sudo chmod +x "${ROOTFS_DIR}/usr/lib/debian/"*
 
-          # /etc/armbian-release
-          sudo cp armbian/armbian-release "${ROOTFS_DIR}/etc/armbian-release"
-          sudo cp armbian/armbian-firstrun-etc "${ROOTFS_DIR}/etc/default/armbian-firstrun"
+          # /etc/debian-release
+          sudo cp debian/debian-release "${ROOTFS_DIR}/etc/debian-release"
+          sudo cp debian/debian-firstrun-etc "${ROOTFS_DIR}/etc/default/debian-firstrun"
 
           # systemd service 文件
-          for f in systemd/armbian-firstrun.service \
-                   systemd/armbian-hardware-optimize.service \
-                   systemd/armbian-resize-filesystem.service \
-                   systemd/armbian-zram-config.service; do
+          for f in systemd/debian-firstrun.service \
+                   systemd/debian-hardware-optimize.service \
+                   systemd/debian-resize-filesystem.service \
+                   systemd/debian-zram-config.service; do
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
 
-          # enable 服务
-          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-firstrun.service
-          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-hardware-optimize.service
-          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-resize-filesystem.service
-          sudo chroot "${ROOTFS_DIR}" systemctl enable armbian-zram-config.service
 
-          echo "▶ armbian platform scripts injected"
+          # enable 服务
+          sudo chroot "${ROOTFS_DIR}" systemctl enable debian-firstrun.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable debian-hardware-optimize.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable debian-resize-filesystem.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable debian-zram-config.service
+
+          echo "▶ debian platform scripts injected"
           
           # ── uInitrd 钩子（让 initramfs-tools 生成 u-boot 兼容格式）──
           # 解码内容：mkimage -A arm64 -O linux -T ramdisk -C gzip ...
