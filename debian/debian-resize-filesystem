@@ -50,7 +50,7 @@ do_expand_partition()
 
 	# check if it's the last partition in logical layout
 	# Note: the order may be different between partition table and logical layout
-	local list=$(parted $diskdev unit s print -sm | awk -F':' "NR>=3{if(\$2 - $partstart > 0){print \$1}}")
+	local list=$(parted $diskdev unit s print -sm | awk -F':' "NR>=3{if(\$1 != $partindex && \$2 - $partstart > 0){print \$1}}")
 	if [[ -n "$list" ]]; then
 		echo -e "\nThe target partition isn't the last partition in logical layout" >&2
 		echo "Partition ${list[*]} behind it" >&2
@@ -131,37 +131,18 @@ do_expand_partition()
 	echo -e "Old partition table:\n"
 	cat /proc/partitions
 
-	# Start resizing
-	echo -e "\nExecuting fdisk:"
-	local partnum=$(parted $diskdev unit s print -sm | awk 'END{print NR-2}')
-	local fdisk_version=$(fdisk --version | awk '{print $NF}' | grep -oE "^[[:digit:]]\.[[:digit:]]+")
-	if [[ $partnum == 1 ]] && awk "BEGIN{exit ! ($fdisk_version >= 2.27 )}"; then
-		# if dealing with fdisk from util-linux 2.27+ we need a workaround for just 1 partition
-		# though it does not break anything - just prevents an "unexpected command" to fdisk
-		# https://github.com/igorpecovnik/lib/issues/353#issuecomment-224728506
-		{
-			echo d
-			echo n; echo p; echo $partindex; echo $partstart; echo $lastsector
-			echo w
-		} | fdisk $diskdev
-	else
-		{
-			echo d; echo $partindex
-			echo n; echo p; echo $partindex; echo $partstart; echo $lastsector
-			echo w
-		} | fdisk $diskdev
-	fi
+	# Start resizing — use parted instead of fdisk to support both MBR and GPT
+	echo -e "\nExecuting parted resizepart:"
+	parted -s "$diskdev" resizepart "$partindex" "${lastsector}s"
+
 	if [[ -n $newpartition ]]; then
-		{
-			echo n; echo p; echo ; echo $(( $lastsector + 1 )); echo $newpartition
-			echo w
-		} | fdisk $diskdev
+		parted -s "$diskdev" mkpart primary $(( $lastsector + 1 ))s "${newpartition}s"
 	fi
 
 	echo -e "\nExecuting partprobe:"
 	# Workaround for Kernel bug in 5.8.y and up. Ignore partprobe returning error and inticating that fs is not expended while it is
 	KERNELID=$(uname -r |  awk -F'.' '{print ($1 * 100) + $2}')
-	if ! partprobe $rootdev && [[ ${KERNELID} -le 507 ]]; then
+	if ! partprobe $diskdev && [[ ${KERNELID} -le 507 ]]; then
 		echo -e "\n### [resize2fs] Automated reboot needed to finish the resize procedure"
 		touch /var/run/resize2fs-reboot
 	fi
@@ -282,16 +263,7 @@ main()
 		# resize LUKS container
 		do_resize_crypt "$rootdev" "$parentdev"
 	else
-		# check if growroot (from cloud-initramfs-growroot package) is installed.
-		# despite it's name, that package does NOT require cloud-init.
-		# it will resize the *partition* which root filesystem on during initramfs.
-		# in this case do nothing here, just run resize2fs (growroot does not handle that).
-		# Note: it can't handle crypt device
-		if [[ -f /usr/share/initramfs-tools/hooks/growroot ]] || [[ -f /usr/share/initramfs-tools/scripts/local-bottom/growroot ]]; then
-			echo "partition resize skipped: growroot detected."
-		else
-			do_expand_partition "$rootdev"
-		fi
+		do_expand_partition "$rootdev"
 	fi
 
 	do_expand_filesystem "$rootdev" "/"
