@@ -391,7 +391,7 @@ jobs:
           # auto_kernel=true 时让 rebuild 自动选最新版本，不传 -k
           # rk35xx 机型的内核 tag 由 model_database.conf 自动决定，无需 -u 干预
           ARGS="-b ${BOARD} -a ${AUTO_KERNEL} -t ${FSTYPE}"
-          ARGS="${ARGS} -s 512/3072 -r ophub/kernel -u stable -n ${BUILDER}"
+          ARGS="${ARGS} -s 256/1024 -r ophub/kernel -u stable -n ${BUILDER}"
           # 当 auto_kernel=false 时才传 -k（且过滤掉 rk35xx/ 前缀）
           if [[ "${AUTO_KERNEL}" != "true" ]]; then
             KERNEL_VER="${KERNEL##*/}"  # 去掉 rk35xx/ 等前缀
