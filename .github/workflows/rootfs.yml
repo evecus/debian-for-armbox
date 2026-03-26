@@ -157,12 +157,16 @@ jobs:
               locales tzdata \
               iproute2 network-manager ifupdown \
               net-tools iputils-ping dnsutils \
-              wpasupplicant wireless-tools chrony \
+              wireless-tools chrony \
               bash-completion htop nano vim nftables \
               u-boot-tools initramfs-tools parted \
               btrfs-progs e2fsprogs dosfstools \
               lsof file procps cron ntpdate bsdextrautils \
               --no-install-recommends
+            # wpasupplicant 单独安装，不加 --no-install-recommends
+            # 确保 libnl-3-200 libnl-genl-3-200 libnl-route-3-200 等依赖完整装入
+            # 缺失时 NetworkManager 每 13 秒重试 wpa_supplicant，导致 systemd 持续 ~3% CPU
+            apt-get install -y wpasupplicant
             apt-get clean && rm -rf /var/lib/apt/lists/*
           "
 
