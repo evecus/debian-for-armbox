@@ -167,7 +167,7 @@ jobs:
           sudo chmod +x "${REBUILD_DIR}/rebuild"
           cd "${REBUILD_DIR}"
 
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 512/2048 -r ophub/kernel -n ${BUILDER}"
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1024 -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
