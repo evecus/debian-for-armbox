@@ -162,6 +162,7 @@ jobs:
               u-boot-tools initramfs-tools parted \
               btrfs-progs e2fsprogs dosfstools \
               lsof file procps cron ntpdate bsdextrautils \
+              wireless-regdb \
               --no-install-recommends
             # wpasupplicant 单独安装，不加 --no-install-recommends
             # 确保 libnl-3-200 libnl-genl-3-200 libnl-route-3-200 等依赖完整装入
@@ -259,16 +260,27 @@ jobs:
           for f in systemd/debian-firstrun.service \
                    systemd/debian-hardware-optimize.service \
                    systemd/debian-resize-filesystem.service \
-                   systemd/debian-zram-config.service; do
+                   systemd/debian-zram-config.service \
+                   systemd/plymouth-killer.service; do
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
-
 
           # enable 服务
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-firstrun.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-hardware-optimize.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-resize-filesystem.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-zram-config.service
+          sudo chroot "${ROOTFS_DIR}" systemctl enable plymouth-killer.service
+
+          # ── 禁用不必要的服务 ──────────────────────────────────────────
+          # networking.service: 已用 NetworkManager，ifupdown 冗余
+          # NetworkManager-wait-online.service: 等待网络上线会拖慢启动
+          # e2scrub_reap.service: ext4 在线检查需要 LVM，此环境不适用
+          # systemd-pstore.service: 内核崩溃日志持久化，嵌入式不需要
+          sudo chroot "${ROOTFS_DIR}" systemctl disable networking.service 2>/dev/null || true
+          sudo chroot "${ROOTFS_DIR}" systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+          sudo chroot "${ROOTFS_DIR}" systemctl disable e2scrub_reap.service 2>/dev/null || true
+          sudo chroot "${ROOTFS_DIR}" systemctl disable systemd-pstore.service 2>/dev/null || true
 
           echo "▶ debian platform scripts injected"
           
@@ -297,6 +309,21 @@ jobs:
             | sudo tee    "${ROOTFS_DIR}/etc/fstab" > /dev/null
           printf 'LABEL=BOOT\t/boot\tvfat\tdefaults\t0 2\n' \
             | sudo tee -a "${ROOTFS_DIR}/etc/fstab" > /dev/null
+
+          # ── armbianEnv.txt 优化（rebuild 写入 /boot 后由 firstrun 修正）─
+          # 写入修正脚本，在首次启动时应用（此时 /boot 已挂载）
+          sudo mkdir -p "${ROOTFS_DIR}/usr/lib/debian"
+          cat << 'ENVFIX' | sudo tee "${ROOTFS_DIR}/usr/lib/debian/fix-armbianenv" > /dev/null
+#!/bin/bash
+# 修正 armbianEnv.txt：关闭 bootlogo，降低日志级别
+ENVFILE="/boot/armbianEnv.txt"
+[[ -f "${ENVFILE}" ]] || exit 0
+sed -i 's/^bootlogo=true/bootlogo=false/' "${ENVFILE}"
+sed -i 's/^verbosity=[0-9]*/verbosity=3/' "${ENVFILE}"
+# 标记已执行，避免重复运行
+rm -f /usr/lib/debian/fix-armbianenv
+ENVFIX
+          sudo chmod +x "${ROOTFS_DIR}/usr/lib/debian/fix-armbianenv"
 
           # ── 预建 rebuild 需要的目录 ───────────────────────────────────
           # rebuild 的 replace_kernel 步骤执行 tar -C .../usr/lib/modules
