@@ -21,12 +21,11 @@ on:
       armbian_kernel:
         description: "内核版本"
         required: false
-        default: "6.12.y"
+        default: "rk35xx/6.1.y"
         type: choice
         options:
           - 6.12.y
-          - 6.6.y
-          - 6.1.y
+          - rk35xx/6.1.y
 
       auto_kernel:
         description: "自动使用同系列最新内核"
