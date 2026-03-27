@@ -260,8 +260,7 @@ jobs:
           for f in systemd/debian-firstrun.service \
                    systemd/debian-hardware-optimize.service \
                    systemd/debian-resize-filesystem.service \
-                   systemd/debian-zram-config.service \
-                   systemd/plymouth-killer.service; do
+                   systemd/debian-zram-config.service; do
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
 
@@ -270,8 +269,7 @@ jobs:
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-hardware-optimize.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-resize-filesystem.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-zram-config.service
-          sudo chroot "${ROOTFS_DIR}" systemctl enable plymouth-killer.service
-
+          
           # ── 禁用不必要的服务 ──────────────────────────────────────────
           # networking.service: 已用 NetworkManager，ifupdown 冗余
           # NetworkManager-wait-online.service: 等待网络上线会拖慢启动
