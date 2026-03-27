@@ -313,17 +313,6 @@ jobs:
           # ── armbianEnv.txt 优化（rebuild 写入 /boot 后由 firstrun 修正）─
           # 写入修正脚本，在首次启动时应用（此时 /boot 已挂载）
           sudo mkdir -p "${ROOTFS_DIR}/usr/lib/debian"
-          cat << 'ENVFIX' | sudo tee "${ROOTFS_DIR}/usr/lib/debian/fix-armbianenv" > /dev/null
-#!/bin/bash
-# 修正 armbianEnv.txt：关闭 bootlogo，降低日志级别
-ENVFILE="/boot/armbianEnv.txt"
-[[ -f "${ENVFILE}" ]] || exit 0
-sed -i 's/^bootlogo=true/bootlogo=false/' "${ENVFILE}"
-sed -i 's/^verbosity=[0-9]*/verbosity=3/' "${ENVFILE}"
-# 标记已执行，避免重复运行
-rm -f /usr/lib/debian/fix-armbianenv
-ENVFIX
-          sudo chmod +x "${ROOTFS_DIR}/usr/lib/debian/fix-armbianenv"
 
           # ── 预建 rebuild 需要的目录 ───────────────────────────────────
           # rebuild 的 replace_kernel 步骤执行 tar -C .../usr/lib/modules
