@@ -87,13 +87,11 @@ kernel_repo="https://github.com/ophub/kernel"
 default_tags="stable"
 kernel_usage=""
 # Set the list of kernels used by default(Selectable version)
-stable_kernel=("6.12.y" "6.18.y")
+# panther-x2 (RK3566) uses stable kernel series
+stable_kernel=("6.12.y")
 flippy_kernel=(${stable_kernel[@]})
 beta_kernel=(${stable_kernel[@]})
-rk3588_kernel=("6.1.y")
-rk35xx_kernel=("6.1.y")
-h6_kernel=("6.6.y")
-specific_6xy=("6.1.y" "6.6.y" "6.12.y" "6.18.y")
+specific_6xy=("6.12.y")
 specific_5xy=("5.10.y" "5.15.y")
 # Set to automatically use the latest kernel
 auto_kernel="true"
@@ -278,64 +276,9 @@ check_data() {
     # 9.KERNEL_TAGS  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.CONTRIBUTORS  14.BOARD  15.BUILD
     [[ -f "${model_conf}" ]] || error_msg "Missing model config file: [ ${model_conf} ]"
 
-    # Get a list of build devices
-    if [[ "${build_board}" == "all" ]]; then
-        board_list=":(yes)"
-        build_armbian=($(
-            cat ${model_conf} |
-                sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
-                grep -E "^[^#].*:yes$" | awk -F':' '{print $14}' |
-                sort -u | xargs
-        ))
-    elif [[ "${build_board}" =~ ^(amlogic|rockchip|allwinner)([0-9]+_[0-9]+|[0-9]+)?$ ]]; then
-        # Get the platform name and range, such as [ amlogic50 ], [ rockchip50_100 ], etc.
-        # name is [ amlogic ], [ rockchip ], [ allwinner ], range is [ 50 ], [ 50_100 ], etc.
-        # amlogic50 -> platform_name=amlogic, platform_range=50, rockchip50_100 -> platform_name=rockchip, platform_range=50_100
-        platform_name="${BASH_REMATCH[1]}"
-        platform_range="${BASH_REMATCH[2]}"
-        build_armbian=($(
-            cat ${model_conf} |
-                sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
-                grep -E "^[^#].*:${platform_name}:.*:yes$" | awk -F':' '{print $14}' |
-                sort -u | xargs
-        ))
-        # Slice by range if specified, such as [ amlogic50 ], [ rockchip50_100 ], etc.
-        if [[ "${platform_range}" =~ ^([0-9]+)_([0-9]+)$ ]]; then
-            build_armbian=("${build_armbian[@]:${BASH_REMATCH[1]}:$((BASH_REMATCH[2] - BASH_REMATCH[1]))}")
-        elif [[ -n "${platform_range}" ]]; then
-            build_armbian=("${build_armbian[@]:0:${platform_range}}")
-        fi
-        board_list=":($(echo ${build_armbian[@]} | sed -e 's/ /\|/g')):(yes)"
-    elif [[ "${build_board}" =~ ^(first|last)([0-9]+)$ ]]; then
-        # first<N>: first N boards, last<N>: last N boards
-        slice_type="${BASH_REMATCH[1]}"
-        slice_num="${BASH_REMATCH[2]}"
-        build_armbian=($(
-            cat ${model_conf} |
-                sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
-                grep -E "^[^#].*:yes$" | awk -F':' '{print $14}' |
-                sort -u | xargs
-        ))
-        [[ "${slice_type}" == "first" ]] && build_armbian=("${build_armbian[@]:0:${slice_num}}")
-        [[ "${slice_type}" == "last" ]] && build_armbian=("${build_armbian[@]: -${slice_num}}")
-        board_list=":($(echo ${build_armbian[@]} | sed -e 's/ /\|/g')):(yes)"
-    elif [[ "${build_board}" =~ ^range([0-9]+)_([0-9]+)$ ]]; then
-        # range<N>_<M>: boards from index N, count M-N
-        range_start="${BASH_REMATCH[1]}"
-        range_end="${BASH_REMATCH[2]}"
-        build_armbian=($(
-            cat ${model_conf} |
-                sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
-                grep -E "^[^#].*:yes$" | awk -F':' '{print $14}' |
-                sort -u | xargs
-        ))
-        build_armbian=("${build_armbian[@]:${range_start}:$((range_end - range_start))}")
-        board_list=":($(echo ${build_armbian[@]} | sed -e 's/ /\|/g')):(yes)"
-    else
-        board_list=":($(echo ${build_board} | sed -e 's/_/\|/g')):(yes|no)"
-        build_armbian=($(echo ${build_board} | sed -e 's/_/ /g'))
-    fi
-    [[ "${#build_armbian[@]}" -eq 0 ]] && error_msg "The [ BOARD ] is missing, stop building."
+    # Fixed target: panther-x2 only
+    build_armbian=("panther-x2")
+    board_list=":(panther-x2):(yes|no)"
 
     # Get the kernel array
     kernel_from=($(
@@ -551,7 +494,7 @@ download_kernel() {
                     # Download the kernel files. If the download fails, try again 10 times.
                     [[ -d "${kernel_path}/${key}" ]] || mkdir -p ${kernel_path}/${key}
                     for t in {1..10}; do
-                        curl -fsSL "${kernel_down_from}" -o "${kernel_path}/kernel_stable/6.12.78.tar.gz"
+                        curl -fsSL "${kernel_down_from}" -o "${kernel_path}/${key}/${kernel_var}.tar.gz"
                         [[ "${?}" -eq 0 ]] && break || sleep 60
                     done
                     [[ "${?}" -eq 0 ]] || error_msg "Failed to download the kernel files from the server."
