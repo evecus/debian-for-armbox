@@ -5,10 +5,10 @@
 # License version 2. This program is licensed "as is" without any
 # warranty of any kind, whether express or implied.
 #
-# Function: Debian kernel update
+# Function: ubuntu kernel update
 # Based on: https://github.com/ophub/amlogic-s9xxx-armbian
 #
-# Command: debian-update
+# Command: ubuntu-update
 #
 #===================================== Set default parameters =====================================
 
@@ -372,7 +372,7 @@ update_kernel() {
 # Display help
 help_info() {
     cat <<EOF
-  Usage: debian-update [options]
+  Usage: ubuntu-update [options]
 
   Options:
     -r <owner/repo>   Kernel download repository (default: ophub/kernel)
@@ -382,20 +382,20 @@ help_info() {
     -h                Show this help
 
   Example:
-    debian-update
-    debian-update -k 6.1.y
-    debian-update -k 6.6.y -u stable -b no
+    ubuntu-update
+    ubuntu-update -k 6.1.y
+    ubuntu-update -k 6.6.y -u stable -b no
 EOF
     exit 0
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-[[ "$(id -u)" == "0" ]] || error_msg "Please run as root: [ sudo debian-update ]"
+[[ "$(id -u)" == "0" ]] || error_msg "Please run as root: [ sudo ubuntu-update ]"
 
 [[ "${@}" == "-h" ]] && help_info
 
-echo -e "${STEPS} Welcome to the Debian kernel update tool."
+echo -e "${STEPS} Welcome to the Ubuntu kernel update tool."
 
 check_depends
 init_var "${@}"
