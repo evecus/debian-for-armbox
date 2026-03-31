@@ -260,8 +260,8 @@ jobs:
           sudo cp ubuntu/ubuntu-release          "${ROOTFS_DIR}/etc/ubuntu-release"
           sudo cp ubuntu/ubuntu-firstrun-etc     "${ROOTFS_DIR}/etc/default/ubuntu-firstrun"
           sudo cp ubuntu/NetworkManager.conf     "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf"
-          sudo cp ubuntu/ubuntu-update           "${ROOTFS_DIR}/usr/local/bin/ubuntu-update"
-          sudo chmod +x "${ROOTFS_DIR}/usr/local/bin/ubuntu-update"
+          sudo cp ubuntu/u-u                     "${ROOTFS_DIR}/usr/local/bin/u-u"
+          sudo chmod +x "${ROOTFS_DIR}/usr/local/bin/u-u"
 
           # systemd service 文件
           for f in systemd/ubuntu-firstrun.service \
