@@ -5,10 +5,10 @@
 # This file is licensed under the terms of the GNU General Public
 # License version 2. This program is licensed "as is" without any
 # warranty of any kind, whether express or implied.
-. /etc/debian-release
+. /etc/ubuntu-release
 . /lib/init/vars.sh
 . /lib/lsb/init-functions
-. /usr/lib/debian/debian-common
+. /usr/lib/ubuntu/ubuntu-common
 
 do_expand_partition()
 {
@@ -95,7 +95,7 @@ do_expand_partition()
 		# check device capacity. If 4GiB or below do not use whole card but leave a 5% spare area
 		# to help older cards with wear leveling and garbage collection. In case this reduced card
 		# capacity is less than the actual image capacity this is a clear sign that someone wants
-		# to use debian on a card of inappropriate size so he gets what he deserves (at least he
+		# to use ubuntu on a card of inappropriate size so he gets what he deserves (at least he
 		# should know what he's doing)
 		if [[ $(( $sectorsize * $capacity )) -lt $(( 4 * 1024 * 1024 * 1024 )) ]]; then # 4 GiB or less
 			# Leave 5 percent unpartitioned
@@ -290,7 +290,7 @@ main()
 	do_expand_filesystem "$rootdev" "/"
 
 	# disable itself
-	[[ ! -f /var/run/resize2fs-reboot ]] && systemctl disable debian-resize-filesystem
+	[[ ! -f /var/run/resize2fs-reboot ]] && systemctl disable ubuntu-resize-filesystem
 	exit 0
 }
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Copyright (c) Authors: https://www.armbian.com/authors
-# Modified for Debian / panther-x2 (RK3566) — removed unrelated board IRQ cases
+# Modified for Ubuntu / panther-x2 (RK3566) — removed unrelated board IRQ cases
 
-. /etc/debian-release
-. /usr/lib/debian/debian-common
+. /etc/ubuntu-release
+. /usr/lib/ubuntu/ubuntu-common
 
 set_io_scheduler() {
 	KERNELID=$(uname -r | awk -F'.' '{print ($1 * 100) + $2}')
@@ -83,10 +83,10 @@ prepare_board() {
 update_branch_from_installed_kernel() {
 	BRANCH=$(dpkg -l | grep -E "linux-image" | grep -E "current|legacy|edge" | \
 		awk '{print $2}' | cut -d'-' -f3 | head -1)
-	if grep -q BRANCH /etc/debian-release 2>/dev/null; then
-		[[ -n "${BRANCH}" ]] && sed -i "s/BRANCH=.*/BRANCH=${BRANCH}/" /etc/debian-release
+	if grep -q BRANCH /etc/ubuntu-release 2>/dev/null; then
+		[[ -n "${BRANCH}" ]] && sed -i "s/BRANCH=.*/BRANCH=${BRANCH}/" /etc/ubuntu-release
 	else
-		[[ -n "${BRANCH}" ]] && echo "BRANCH=${BRANCH}" >> /etc/debian-release
+		[[ -n "${BRANCH}" ]] && echo "BRANCH=${BRANCH}" >> /etc/ubuntu-release
 	fi
 }
 
