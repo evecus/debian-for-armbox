@@ -242,6 +242,7 @@ jobs:
 
           # 脚本本体
           for f in debian/debian-firstrun \
+                   debian/debian-common \
                    debian/debian-hardware-optimization \
                    debian/debian-resize-filesystem \
                    debian/debian-zram-config; do
@@ -253,8 +254,8 @@ jobs:
           sudo cp debian/debian-release "${ROOTFS_DIR}/etc/debian-release"
           sudo cp debian/debian-firstrun-etc "${ROOTFS_DIR}/etc/default/debian-firstrun"
           sudo cp debian/NetworkManager.conf "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf"
-          sudo cp debian/debian-update "${ROOTFS_DIR}/usr/local/bin/debian-update"
-          sudo chmod +x "${ROOTFS_DIR}/usr/local/bin/debian-update"
+          sudo cp debian/debian-update "${ROOTFS_DIR}/usr/local/bin/d-u"
+          sudo chmod +x "${ROOTFS_DIR}/usr/local/bin/d-u"
           
           # systemd service 文件
           for f in systemd/debian-firstrun.service \
