@@ -290,7 +290,7 @@ main()
 	do_expand_filesystem "$rootdev" "/"
 
 	# disable itself
-	[[ ! -f /var/run/resize2fs-reboot ]] && systemctl disable debian-resize-filesystem
+	[[ ! -f /var/run/resize2fs-reboot ]] && systemctl disable --now debian-resize-filesystem
 	exit 0
 }
 
