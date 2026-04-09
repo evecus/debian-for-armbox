@@ -155,7 +155,7 @@ jobs:
               u-boot-tools initramfs-tools parted \
               btrfs-progs e2fsprogs dosfstools \
               lsof file procps cron ntpdate bsdextrautils \
-              wireless-regdb \
+              wireless-regdb systemd-resolved \
               --no-install-recommends
             # wpasupplicant 单独安装，不加 --no-install-recommends
             # 确保 libnl-3-200 libnl-genl-3-200 libnl-route-3-200 等依赖完整装入
@@ -201,6 +201,7 @@ jobs:
           sudo chroot "${ROOTFS_DIR}" systemctl enable ssh 2>/dev/null || true
           sudo chroot "${ROOTFS_DIR}" systemctl enable chrony 2>/dev/null || true
           sudo chroot "${ROOTFS_DIR}" systemctl enable nftables 2>/dev/null || true
+          sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-resolved 2>/dev/null || true
 
           # ── root 密码 ─────────────────────────────────────────────────
           ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
