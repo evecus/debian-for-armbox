@@ -516,6 +516,7 @@ jobs:
             # disable 不需要的服务
             systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
             systemctl disable systemd-pstore.service             2>/dev/null || true
+            systemctl disable systemd-networkd                   2>/dev/null || true
           "
 
           # ── 卸载 chroot 挂载点 ────────────────────────────────────────
