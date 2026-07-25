@@ -20,9 +20,10 @@ on:
       armbian_kernel:
         description: "内核版本"
         required: false
-        default: "6.12.y"
+        default: "6.18.y"
         type: choice
         options:
+          - 6.18.y
           - 6.12.y
           - 6.1.y
 
