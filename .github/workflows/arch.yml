@@ -1,18 +1,3 @@
-#==========================================================================
-# 用途：构建 panther-x2 (RK3566) Arch Linux ARM 固件
-#
-# 两种模式（自动判断）：
-#   A. 填写 rootfs_url → 直接用现有 rootfs 执行 rebuild（快，约 5 分钟）
-#   B. 不填 rootfs_url → 先构建 rootfs 再 rebuild，同时发布 rootfs + 固件
-#
-# rootfs 构建方式：下载 ALARM 官方 aarch64 rootfs tarball + arch-chroot 装包 + 精简
-#   - ubuntu-24.04-arm 是 arm64 host + ALARM aarch64 rootfs，arch-chroot 原生无需 binfmt
-#   - 不装 linux 内核包（内核来自 ophub tarball）
-#   - 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
-#   - 时间同步用 systemd-timesyncd（systemd 内置）
-#   - 网络用纯 NetworkManager（无 netplan）
-#   - 构建完成后精简：卸载冗余包、删 doc/man/locale、清缓存
-#==========================================================================
 name: Build Arch
 
 on:
@@ -705,7 +690,13 @@ jobs:
 
       # ── 5. Rebuild：注入内核 + uboot + 平台文件 ──────────────────────
       # rebuild 的 -s 参数控制新镜像分区大小：-s boot_mb/root_mb
-      # 精简后 rootfs 约 700-900MiB，动态计算 root_mb 保险
+      # 精简后 rootfs 实测稳定在 800MiB-1GiB，与 debian（256/1024 固定值）
+      # 量级相当，改回固定值：256(boot)/1280(root)。
+      # root 比 debian 的 1024 多留 256MiB 余量，覆盖 pacman 更新缓存、
+      # 日志增长、用户后续 pacman -S 装包等场景；固定值也让镜像大小
+      # 可预期，不必每次都用 du 重新计算。
+      # 若后续 rootfs 体积有较大变化（比如加了很多 extra_packages），
+      # 再手动调整这两个数字即可。
       - name: Rebuild image
         id: rebuild
         if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
@@ -719,19 +710,13 @@ jobs:
           sudo chmod +x "${REBUILD_DIR}/rebuild"
           cd "${REBUILD_DIR}"
 
-          # 动态计算 root_mb：rootfs 实际大小 + 内核/modules 空间 + 缓冲
-          ROOTFS_ACTUAL_MB=$(sudo du -sm "${ROOTFS_DIR}" | awk '{print $1}')
-          ROOT_MB=$((ROOTFS_ACTUAL_MB + 512 + 256))
-          BOOT_MB=256
-          echo "▶ rootfs 实际: ${ROOTFS_ACTUAL_MB}MiB → rebuild -s ${BOOT_MB}/${ROOT_MB}"
-
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1372 -r ophub/kernel -n ${BUILDER}"
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1280 -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
             -a true \
             -t ${FSTYPE} \
-            -s ${BOOT_MB}/${ROOT_MB} \
+            -s 256/1280 \
             -r ophub/kernel \
             -n ${BUILDER}
 
@@ -754,7 +739,6 @@ jobs:
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
-            ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}.sha256
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
