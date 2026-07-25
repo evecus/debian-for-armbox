@@ -1,0 +1,39 @@
+#!/bin/bash
+# Copyright (c) Authors: https://www.armbian.com/authors
+# Modified for Arch / panther-x2 (RK3566) — removed unrelated board workarounds
+# Arch 上 SSH host keys 直接用 ssh-keygen -A 生成，不依赖 dpkg-reconfigure
+
+. /etc/arch-release
+. /usr/lib/arch/arch-common
+
+case "$1" in
+	start)
+		# SSH host keys 重新生成
+		if [[ -d /etc/ssh ]]; then
+			read entropy_before < /proc/sys/kernel/random/entropy_avail
+			rm -f /etc/ssh/ssh_host_*
+			ssh-keygen -A >/dev/null 2>&1 || true
+			systemctl restart sshd 2>/dev/null || true
+			read entropy_after < /proc/sys/kernel/random/entropy_avail
+			echo "### [firstrun] SSH keys regenerated (entropy: ${entropy_before} -> ${entropy_after})" >> "${Log}"
+		fi
+
+		# 写入安装 UUID
+		if ! grep -q "^INSTALL_UUID=" /etc/arch-release 2>/dev/null; then
+			UUID="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+			[[ -n "${UUID}" ]] && echo "INSTALL_UUID=\"${UUID}\"" >> /etc/arch-release
+			echo "### [firstrun] UUID=${UUID}" >> "${Log}"
+		fi
+
+		# 禁用 purple newt 背景（Arch 默认无 newt，保留以兼容）
+		[[ -f /etc/newt/palette ]] && sed -i 's/magenta/blue/g' /etc/newt/palette
+
+		systemctl disable arch-firstrun.service
+		echo "### [firstrun] done" >> "${Log}"
+		exit 0
+		;;
+	*)
+		echo "Usage: $0 start"
+		exit 0
+		;;
+esac

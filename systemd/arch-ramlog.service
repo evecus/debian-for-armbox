@@ -1,0 +1,19 @@
+[Unit]
+Description=Arch memory supported logging
+DefaultDependencies=no
+Before=rsyslog.service sysinit.target syslog.target
+After=arch-zram-config.service
+Conflicts=shutdown.target
+RequiresMountsFor=/var/log /var/log.hdd
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/arch/arch-ramlog start
+ExecStop=/usr/lib/arch/arch-ramlog stop
+ExecReload=/usr/lib/arch/arch-ramlog write
+RemainAfterExit=yes
+TimeoutStartSec=30sec
+
+[Install]
+WantedBy=sysinit.target

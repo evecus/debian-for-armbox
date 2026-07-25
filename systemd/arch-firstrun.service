@@ -1,0 +1,14 @@
+[Unit]
+Description=Arch first run tasks
+Before=getty.target system-getty.slice
+After=sshd.service
+
+[Service]
+Type=simple
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/arch-firstrun
+ExecStart=/usr/lib/arch/arch-firstrun start
+TimeoutStartSec=2min
+
+[Install]
+WantedBy=multi-user.target
