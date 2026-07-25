@@ -526,8 +526,8 @@ jobs:
             steps.package_rootfs.outputs.status == 'success'
           }}
         with:
-          tag: "Ubuntu_${{ inputs.debian_release }}_${{ inputs.armbian_kernel }}_${{ github.run_number }}"
-          name: "Ubuntu ${{ inputs.debian_release }} · panther-x2 · ${{ inputs.armbian_kernel }} · #${{ github.run_number }}"
+          tag: "Ubuntu_${{ inputs.debian_release }}"
+          name: "Ubuntu ${{ inputs.debian_release }} · panther-x2"
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.TARBALL_PATH }}
@@ -569,8 +569,8 @@ jobs:
             env.SKIP_ROOTFS_BUILD == 'true'
           }}
         with:
-          tag: "Ubuntu_${{ inputs.debian_release }}_${{ inputs.armbian_kernel }}_${{ github.run_number }}"
-          name: "Ubuntu ${{ inputs.debian_release }} · panther-x2 · ${{ inputs.armbian_kernel }} · #${{ github.run_number }}"
+          tag: "Ubuntu_${{ inputs.debian_release }}"
+          name: "Ubuntu ${{ inputs.debian_release }} · panther-x2"
           artifacts: "${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*"
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
