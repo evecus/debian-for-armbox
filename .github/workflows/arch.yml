@@ -301,20 +301,77 @@ jobs:
           echo "▶ pacman.conf 内容:"
           grep -E '^(Server|Architecture|\[)' "${ROOTFS_DIR}/etc/pacman.conf"
 
-          # ── 初始化 keyring + 装基础包 ────────────────────────────────
-          # 不装 linux 内核包（内核来自 ophub tarball）
-          # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
-          # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
+          # ── 初始化 keyring ───────────────────────────────────────────
           echo "▶ mount chroot 挂载点..."
           mount_chroot
 
           echo "▶ 精简前 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
-          echo "▶ 初始化 pacman keyring + 安装基础包..."
+          echo "▶ 初始化 pacman keyring..."
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
             pacman-key --init
             pacman-key --populate archlinuxarm
+            pacman -Sy --noconfirm
+          "
+
+          # ── 第一步：先卸载 ALARM tarball 自带、但我们不需要的预装包 ──
+          # 顺序很关键：必须在装我们要的包【之前】做这一步。
+          # 原因：ALARM 官方 tarball 是完整系统，不是空目录，天生带了一整套
+          # base 组周边工具（内核、firmware、磁盘管理工具、man 系统等）。
+          # 如果按"先装需要的包 → 再卸不需要的包"的顺序，卸载阶段要么要
+          # 精确判断"这个包会不会被后面装的包依赖"（容易误伤），要么用
+          # pacman -Qdtq 清孤儿包时把本该保留的依赖也带走。
+          # 反过来"先卸不需要的 → 再装需要的"，即使这里卸多了、卸到了
+          # 后面清单里要用的包的依赖，pacman -S --needed 也会在下一步
+          # 自动把缺失的依赖重新装回来，不会漏装；而且不需要的东西已经
+          # 提前清空，最终 rootfs 里"有什么"完全由下面的安装清单决定，
+          # 跟 debian debootstrap 的精简逻辑对齐。
+          # 注：pacman/glibc/filesystem 等核心包被其他包依赖，pacman 会
+          # 拒绝卸载，不用特意排除，交给 --noconfirm + || true 兜底跳过即可。
+          echo "▶ 卸载 ALARM 预装、但用不到的包..."
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            set -e
+            # linux-aarch64 / linux-aarch64-headers: ALARM 预装内核，内核来自 ophub tarball
+            # linux-firmware / linux-firmware-whence: 数百 MB，panther-x2 (RK3566) 的
+            #   wifi/bt 固件由 ophub 内核包注入，ALARM 这份对该板子价值有限
+            # gcc/binutils/make/patch/pkgconf/fakeroot: 编译工具链，运行时不需要，要编译时再装
+            # hardlink: ALARM 装的重复文件合并工具，无用
+            # man-db/man-pages/texinfo: 不需要 man 系统
+            # cryptsetup/lvm2/mdadm/xfsprogs/f2fs-tools: 磁盘/RAID 管理工具，这块板子只用 ext4/btrfs
+            # pciutils/usbutils: 桌面/服务器调试工具，用不上
+            # reflector: 官方镜像自动选优工具，pacman.conf 已手工配好多镜像
+            # s-nail: 命令行邮件客户端，base 组自带，实际很少用
+            # sudo -R 无视依赖失败即可，因为后面装包时 pacman 会按需补回真正必要的依赖
+            pacman -Rns --noconfirm \
+              linux-aarch64 \
+              linux-aarch64-headers \
+              linux-firmware \
+              linux-firmware-whence \
+              gcc gcc-libs binutils make patch pkgconf fakeroot \
+              hardlink \
+              man-db man-pages texinfo \
+              cryptsetup lvm2 mdadm xfsprogs f2fs-tools \
+              pciutils usbutils \
+              reflector \
+              s-nail \
+              2>/dev/null || true
+            # 清一遍孤儿包（此时装我们要的包之前清，同理：装包阶段 pacman
+            # 会把真正需要的依赖重新拉回来，这里清得激进也不会漏装）
+            orphans=\$(pacman -Qdtq 2>/dev/null || true)
+            [[ -n \"\${orphans}\" ]] && pacman -Rns --noconfirm \${orphans} 2>/dev/null || true
+          "
+          echo "▶ 卸载不需要的包后 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+
+          # ── 第二步：安装我们需要的包 ──────────────────────────────────
+          # 不装 linux 内核包（内核来自 ophub tarball）
+          # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
+          # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
+          # 用 --needed：已存在的包（比如系统自带的 systemd/bash 等核心依赖）跳过，
+          # 缺失的（包括第一步卸掉后其实还需要的依赖）会被 pacman 自动装回
+          echo "▶ 安装需要的基础包..."
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            set -e
             pacman -Sy --noconfirm --needed \
               openssh sudo curl wget ca-certificates tzdata \
               iproute2 networkmanager \
@@ -340,36 +397,21 @@ jobs:
             "
           fi
 
-          # ── 精简 rootfs ────────────────────────────────────────────────
-          # 目标：从 2.2G 压到 ~700-900M，与 debian rootfs 量级相当
-          # 1. 卸载不需要的预装包（内核/firmware/gcc 工具链等，内核来自 ophub）
-          # 2. 清 pacman 包缓存（保留当前版本的回滚包可选，全清更小）
-          # 3. 删除文档/man/info/locale（只留 en_US、zh_CN、zh_TW）
-          # 4. 清空日志
-          echo "▶ 精简 rootfs..."
+          # ── 第三步：收尾清理（此时包清单已经最终确定，只清垃圾文件，
+          #    不再卸包，避免碰到刚装好的东西）──────────────────────────
+          # 1. 清 pacman 包缓存 + 数据库同步缓存 + pacman 日志
+          # 2. 删除文档/man/info/locale（只留 en_US、zh_CN、zh_TW）
+          # 3. 清空日志、清 root 家目录残留
+          echo "▶ 收尾清理..."
 
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
-            echo '  → 卸载不需要的预装包...'
-            # linux-aarch64: ALARM 预装内核，内核来自 ophub tarball，卸掉
-            # linux-firmware: 巨大（数百 MB），panther-x2 的 wifi/bt 固件 ophub 会注入或已内置
-            #                 保守起见保留 linux-firmware，只卸 kernels
-            # base-devel: gcc/make 等，普通用户不需要（要编译时再装）
-            # hardlink: ALARM 装的重复文件合并工具，无用
-            pacman -Rns --noconfirm \
-              linux-aarch64 \
-              linux-aarch64-headers \
-              gcc gcc-libs binutils make patch pkgconf fakeroot \
-              hardlink \
-              2>/dev/null || true
-            # 二次清理：列出仍存在的孤立包（被卸载包的依赖现在没人用）
-            orphans=\$(pacman -Qdtq 2>/dev/null || true)
-            [[ -n \"\${orphans}\" ]] && pacman -Rns --noconfirm \${orphans} 2>/dev/null || true
-
             echo '  → 清 pacman 包缓存...'
             pacman -Sc --noconfirm >/dev/null 2>&1 || true
             # 清掉所有下载的包文件（/var/cache/pacman/pkg/*.pkg.tar.*）
             rm -rf /var/cache/pacman/pkg/*
+            # 清 pacman 操作日志（不影响运行，运行时重新生成）
+            rm -f /var/log/pacman.log
 
             echo '  → 清空日志...'
             # 保留目录结构，清空文件内容
@@ -398,11 +440,15 @@ jobs:
               ! -name 'C*' ! -name 'POSIX*' ! -name 'i18n*' \
               -delete 2>/dev/null || true
 
-            echo '  → 清理临时文件...'
+            echo '  → 清理 root 家目录残留与临时文件...'
+            rm -rf /root/.cache /root/.bash_history
             rm -rf /tmp/* /var/tmp/*
             rm -rf /var/lib/pacman/sync/*
           "
-          echo "▶ 精简后 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+          echo "▶ 最终 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+
+          echo "▶ 最终体积构成 Top 20 (/usr 下，便于后续继续瘦身)..."
+          sudo du -h --max-depth=3 "${ROOTFS_DIR}/usr" 2>/dev/null | sort -rh | head -20 || true
 
           # ── 时区 / locale / hostname ──────────────────────────────────
           sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
