@@ -344,11 +344,7 @@ jobs:
 
             echo '  → 卸载 ex-vi-compat（vim 的依赖方，必须先卸）...'
             pacman -Rns --noconfirm ex-vi-compat
-            verify_removed ex-vi-compat
-
-            echo '  → 卸载 vim / vim-runtime（43MiB，后面装的 nano 已够用）...'
-            pacman -Rns --noconfirm vim vim-runtime
-            verify_removed vim vim-runtime
+            verify_removed ex-vi-compat verify_removed vim vim-runtime
 
             echo '  → 卸载 pciutils / gpm...'
             pacman -Rns --noconfirm \
