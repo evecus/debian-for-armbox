@@ -61,9 +61,10 @@ on:
       armbian_kernel:
         description: "内核版本（panther-x2 使用 stable 系列）"
         required: false
-        default: "6.12.y"
+        default: "6.18.y"
         type: choice
         options:
+          - 6.18.y
           - 6.12.y
           - 6.1.y
 
