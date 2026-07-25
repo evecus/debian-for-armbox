@@ -304,9 +304,6 @@ jobs:
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
 
-            echo '▶ 执行 pacman -Syu 全量更新...'
-            pacman -Syu --noconfirm --needed
-
             verify_removed() {
               local failed=0
               for p in \"\$@\"; do
