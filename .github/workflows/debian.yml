@@ -32,6 +32,7 @@ on:
         options:
           - 6.12.y
           - 6.1.y
+          - 6.18.y
 
       armbian_fstype:
         description: "rootfs 文件系统类型"
