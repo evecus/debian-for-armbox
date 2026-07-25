@@ -1,3 +1,18 @@
+#==========================================================================
+# 用途：构建 panther-x2 (RK3566) Arch Linux ARM 固件
+#
+# 两种模式（自动判断）：
+#   A. 填写 rootfs_url → 直接用现有 rootfs 执行 rebuild（快，约 5 分钟）
+#   B. 不填 rootfs_url → 先构建 rootfs 再 rebuild，同时发布 rootfs + 固件
+#
+# rootfs 构建方式：下载 ALARM 官方 aarch64 rootfs tarball + arch-chroot 装包 + 精简
+#   - ubuntu-24.04-arm 是 arm64 host + ALARM aarch64 rootfs，arch-chroot 原生无需 binfmt
+#   - 不装 linux 内核包（内核来自 ophub tarball）
+#   - 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
+#   - 时间同步用 systemd-timesyncd（systemd 内置）
+#   - 网络用纯 NetworkManager（无 netplan）
+#   - 构建完成后精简：卸载冗余包、删 doc/man/locale、清缓存
+#==========================================================================
 name: Build Arch
 
 on:
@@ -457,11 +472,6 @@ jobs:
             # 删除空的 locale 目录
             find /usr/share/locale -type d -empty -delete 2>/dev/null || true
 
-            echo '  → 删除 i18n（保留 C/POSIX）...'
-            find /usr/share/i18n -type f \
-              ! -name 'C*' ! -name 'POSIX*' ! -name 'i18n*' \
-              -delete 2>/dev/null || true
-
             echo '  → 清理 root 家目录残留与临时文件...'
             rm -rf /root/.cache /root/.bash_history
             rm -rf /tmp/* /var/tmp/*
@@ -473,12 +483,33 @@ jobs:
           sudo du -h --max-depth=3 "${ROOTFS_DIR}/usr" 2>/dev/null | sort -rh | head -20 || true
 
           # ── 时区 / locale / hostname ──────────────────────────────────
+          # 注意：删除 /usr/share/i18n 下的 locale 源文件必须放在 locale-gen
+          # 之后！/usr/share/i18n/locales/en_US 等是 locale-gen 编译
+          # en_US.UTF-8 时读取的源定义文件，如果提前删掉（之前版本曾把这一步
+          # 放在收尾清理里，早于 locale-gen 执行），locale-gen 会因为找不到
+          # 源文件而生成失败，导致最终系统登录时报
+          # "setlocale: LC_CTYPE: cannot change locale (en_US.UTF-8): No such file or directory"。
           sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
           sudo chroot "${ROOTFS_DIR}" bash -c "
             sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
             locale-gen
+
+            # 验证 locale 确实生成成功，生成失败要显式报错而不是静默过去
+            locale -a | grep -qi 'en_US.utf8' || { echo 'ERROR: en_US.UTF-8 locale 生成失败'; exit 1; }
+
             echo 'LANG=en_US.UTF-8' > /etc/locale.conf
           "
+
+          # locale-gen 已完成，此时才能安全删除 i18n 源文件（只留 C/POSIX，
+          # 运行时不再需要 en_US/zh_CN/zh_TW 的源定义，已编译进 /usr/lib/locale）
+          echo "▶ 清理 locale-gen 用剩的 i18n 源文件..."
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            find /usr/share/i18n -type f \
+              ! -name 'C*' ! -name 'POSIX*' ! -name 'i18n*' \
+              -delete 2>/dev/null || true
+            find /usr/share/i18n -type d -empty -delete 2>/dev/null || true
+          "
+
 
           echo "${HOSTNAME_VAL}" | sudo tee "${ROOTFS_DIR}/etc/hostname" > /dev/null
           printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\tlocalhost ip6-localhost ip6-loopback\n' \
@@ -739,6 +770,7 @@ jobs:
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
+            ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}.sha256
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
