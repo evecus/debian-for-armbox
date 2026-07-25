@@ -112,8 +112,7 @@ jobs:
           sudo -E apt-get -y purge \
             azure-cli ghc* zulu* llvm* firefox google* dotnet* \
             powershell openjdk* mongodb* moby* 2>/dev/null || true
-          # arch-chroot 来自 arch-install-scripts；
-          # docker 由 GitHub runner 自带（containerd.io 已装），不另装 docker.io 以避免冲突
+          # arch-chroot 来自 arch-install-scripts（host 是 arm64，arch-chroot arm64 rootfs 原生无需 binfmt）
           sudo -E apt-get -y install \
             parted e2fsprogs dosfstools btrfs-progs \
             u-boot-tools uuid-runtime openssl pigz \
@@ -122,13 +121,6 @@ jobs:
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get clean
           sudo -E timedatectl set-timezone "${TZ}"
-
-          # 验证 runner 自带 docker 可用
-          docker info >/dev/null 2>&1 || {
-            echo "::error::docker 不可用，runner 环境异常"
-            exit 1
-          }
-          echo "▶ docker 版本: $(docker --version)"
 
           # 写入运行时变量
           echo "ARCH_RELEASE=${{ inputs.arch_release || 'aarch64' }}" >> "${GITHUB_ENV}"
@@ -171,7 +163,10 @@ jobs:
           echo "可用空间: $(df -h /builder | tail -1 | awk '{print $4}')"
 
       # ── 3A. 自建 rootfs（rootfs_url 为空时执行）──────────────────────
-      # 用 docker archlinux (arm64 镜像) + pacstrap 拉 ALARM aarch64 包
+      # 直接下载 ALARM 官方 aarch64 rootfs tarball，解压后 arch-chroot 进去 pacman 装包
+      # 注意：archlinux 官方 docker 镜像只有 amd64 manifest，无法在 arm64 host 上跑
+      #       所以不用 docker + pacstrap，而是直接用上游 ALARM rootfs + arch-chroot
+      # ubuntu-24.04-arm 是 arm64 host + ALARM aarch64 rootfs，arch-chroot 原生无需 binfmt
       - name: Build Arch rootfs
         id: build_rootfs
         if: ${{ steps.init.outputs.status == 'success' && env.BUILD_ROOTFS == 'true' && !cancelled() }}
@@ -180,77 +175,65 @@ jobs:
 
           sudo mkdir -p "${ROOTFS_DIR}"
 
-          # ── 准备 ALARM pacman.conf ───────────────────────────────────
-          cat > /tmp/pacman-alarm.conf << 'PACMAN_EOF'
-          [options]
-          Architecture = aarch64
-          SigLevel = Required DatabaseOptional
-          LocalFileSigLevel = Optional
-          HoldPkg = pacman glibc
+          # ── 下载 ALARM 官方 aarch64 rootfs tarball ───────────────────
+          # 用 kernel.org 镜像（全球 CDN，比 mirror.archlinuxarm.org 稳）
+          ALARM_ROOTFS_URL="https://mirrors.kernel.org/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz"
+          echo "▶ 下载 ALARM rootfs: ${ALARM_ROOTFS_URL}"
+          wget -q --show-progress -O /tmp/alarm-rootfs.tar.gz "${ALARM_ROOTFS_URL}"
+          echo "▶ 大小: $(du -sh /tmp/alarm-rootfs.tar.gz | awk '{print $1}')"
 
-          [core]
-          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          echo "▶ 解压到 ${ROOTFS_DIR}..."
+          # -p: 保留权限；--xattrs: 保留扩展属性
+          sudo tar -xpf /tmp/alarm-rootfs.tar.gz --xattrs -C "${ROOTFS_DIR}"
+          rm -f /tmp/alarm-rootfs.tar.gz
+          echo "▶ 解压完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
-          [extra]
-          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          # ── 复制 host resolv.conf 到 rootfs，确保 chroot 内能解析 DNS ──
+          sudo cp /etc/resolv.conf "${ROOTFS_DIR}/etc/resolv.conf"
 
-          [alarm]
-          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          # ALARM rootfs 自带 /etc/pacman.conf 指向 mirror.archlinuxarm.org，
+          # 改为 kernel.org 镜像（更稳）
+          sudo sed -i \
+            's|https://mirror.archlinuxarm.org|https://mirrors.kernel.org/archlinuxarm|g; s|http://mirror.archlinuxarm.org|https://mirrors.kernel.org/archlinuxarm|g' \
+            "${ROOTFS_DIR}/etc/pacman.conf"
 
-          [aur]
-          Server = https://mirror.archlinuxarm.org/$arch/$repo
-          PACMAN_EOF
-          sudo sed -i 's/^[[:space:]]*//' /tmp/pacman-alarm.conf
+          # ── 初始化 keyring + 装基础包 ────────────────────────────────
+          # arch-chroot 由 arch-install-scripts 提供，自动 mount proc/sys/dev/run
+          # 不装 linux 内核包（内核来自 ophub tarball）
+          # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
+          # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
+          echo "▶ 初始化 pacman keyring + 安装基础包..."
+          sudo arch-chroot "${ROOTFS_DIR}" /bin/bash -c "
+            set -e
+            pacman-key --init
+            pacman-key --populate archlinuxarm
+            pacman -Sy --noconfirm --needed \
+              openssh sudo curl wget ca-certificates tzdata \
+              iproute2 networkmanager \
+              net-tools iputils bind \
+              wireless_tools wpa_supplicant wireless-regdb \
+              bash-completion htop nano nftables bc \
+              uboot-tools parted \
+              btrfs-progs e2fsprogs dosfstools \
+              lsof file procps-ng cronie \
+              rsync logrotate
 
-          # ── 在 docker archlinux 里跑 pacstrap ────────────────────────
-          # ubuntu-24.04-arm 是 arm64 host，archlinux:latest multi-arch 会自动拉 arm64 镜像
-          # arch-install-scripts 默认已包含在 archlinux docker 镜像里，无需额外安装
-          echo "▶ docker pull archlinux:latest (arm64)..."
-          docker pull archlinux:latest
-
-          echo "▶ pacstrap ALARM aarch64 rootfs..."
-          docker run --rm --privileged \
-              -v "${ROOTFS_DIR}:/rootfs" \
-              -v "/tmp/pacman-alarm.conf:/tmp/pacman-alarm.conf:ro" \
-              archlinux:latest \
-              bash -c "
-                  set -e
-                  # 确保 arch-install-scripts 已安装（提供 pacstrap）
-                  pacman -Sy --noconfirm --needed arch-install-scripts
-                  # 初始化 keyring
-                  pacman-key --init
-                  # 装 archlinuxarm-keyring（从 ALARM 仓库）
-                  pacman --config /tmp/pacman-alarm.conf --noconfirm -Sy archlinuxarm-keyring
-                  pacman-key --populate archlinuxarm
-                  # pacstrap 安装 rootfs
-                  #   -K: 初始化 rootfs 的 keyring
-                  #   -M: 不复制宿主 machine-id
-                  #   不装 linux 内核包（内核来自 ophub tarball）
-                  #   不装 mkinitcpio（uInitrd 来自 ophub 预生成）
-                  #   不装 chrony（用 systemd-timesyncd，已包含在 systemd）
-                  pacstrap -K -C /tmp/pacman-alarm.conf -M /rootfs \
-                      base base-devel linux-firmware \
-                      openssh sudo curl wget ca-certificates tzdata \
-                      iproute2 networkmanager \
-                      net-tools iputils bind \
-                      wireless_tools wpa_supplicant wireless-regdb \
-                      bash-completion htop nano nftables bc \
-                      uboot-tools parted \
-                      btrfs-progs e2fsprogs dosfstools \
-                      lsof file procps-ng cronie \
-                      rsync logrotate
-              "
+            # 验证关键包
+            for p in openssh networkmanager rsync; do
+              pacman -Qi \${p} >/dev/null 2>&1 || { echo \"ERROR: 关键包 \${p} 安装失败\"; exit 1; }
+            done
+            # 清缓存
+            pacman -Sc --noconfirm >/dev/null 2>&1 || true
+          "
 
           # ── 额外包（可选）────────────────────────────────────────────
           if [[ -n "${EXTRA_PKGS}" ]]; then
             echo "▶ 安装额外包: ${EXTRA_PKGS}"
             sudo arch-chroot "${ROOTFS_DIR}" /bin/bash -c "
               pacman -Sy --noconfirm --needed ${EXTRA_PKGS}
+              pacman -Sc --noconfirm >/dev/null 2>&1 || true
             "
           fi
-
-          # ── 在 rootfs 里写 pacman.conf（持久化）─────────────────────
-          sudo cp /tmp/pacman-alarm.conf "${ROOTFS_DIR}/etc/pacman.conf"
 
           # ── 时区 / locale / hostname ──────────────────────────────────
           sudo arch-chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
