@@ -559,6 +559,10 @@ jobs:
           echo "status=success"        >> "${GITHUB_OUTPUT}"
 
       # ── 5. Rebuild：注入内核 + uboot + 平台文件 ──────────────────────
+      # rebuild 的 -s 参数控制新镜像分区大小：-s boot_mb/root_mb
+      # Arch rootfs 比 debian（debootstrap 约 300MiB）大得多（ALARM 官方 rootfs 2.1G + 装包后 2.2G），
+      # 必须根据 rootfs 实际大小动态计算 root_mb，否则 cp 时 No space left on device。
+      # 公式：root_mb = rootfs实际MiB + 512（内核/modules）+ 256（缓冲）= rootfs + 768
       - name: Rebuild image
         id: rebuild
         if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
@@ -572,13 +576,19 @@ jobs:
           sudo chmod +x "${REBUILD_DIR}/rebuild"
           cd "${REBUILD_DIR}"
 
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1024 -r ophub/kernel -n ${BUILDER}"
+          # 动态计算 root_mb：rootfs 实际大小 + 内核/modules 空间 + 缓冲
+          ROOTFS_ACTUAL_MB=$(sudo du -sm "${ROOTFS_DIR}" | awk '{print $1}')
+          ROOT_MB=$((ROOTFS_ACTUAL_MB + 512 + 256))
+          BOOT_MB=256
+          echo "▶ rootfs 实际: ${ROOTFS_ACTUAL_MB}MiB → rebuild -s ${BOOT_MB}/${ROOT_MB}"
+
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s ${BOOT_MB}/${ROOT_MB} -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
             -a true \
             -t ${FSTYPE} \
-            -s 256/1624 \
+            -s ${BOOT_MB}/${ROOT_MB} \
             -r ophub/kernel \
             -n ${BUILDER}
 
