@@ -5,15 +5,13 @@
 #   A. 填写 rootfs_url → 直接用现有 rootfs 执行 rebuild（快，约 5 分钟）
 #   B. 不填 rootfs_url → 先构建 rootfs 再 rebuild，同时发布 rootfs + 固件
 #
-# rootfs 构建方式：pacstrap 从零构建（对齐 debian 的 debootstrap）
-#   - runs-on: ubuntu-latest (x86_64)
-#   - 注册 aarch64 binfmt（tonistiigi/binfmt），让 x86 host 能跑 arm64 binary
-#   - docker run archlinux:amd64，容器内 pacstrap 拉 ALARM aarch64 包到挂载的 /rootfs
-#   - 容器内 arch-chroot 做 enable 服务、locale、timezone 等（binfmt 转译）
+# rootfs 构建方式：下载 ALARM 官方 aarch64 rootfs tarball + arch-chroot 装包 + 精简
+#   - ubuntu-24.04-arm 是 arm64 host + ALARM aarch64 rootfs，arch-chroot 原生无需 binfmt
 #   - 不装 linux 内核包（内核来自 ophub tarball）
 #   - 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
 #   - 时间同步用 systemd-timesyncd（systemd 内置）
 #   - 网络用纯 NetworkManager（无 netplan）
+#   - 构建完成后精简：卸载冗余包、删 doc/man/locale、清缓存
 #==========================================================================
 name: Build Arch
 
@@ -92,7 +90,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     if: ${{ github.event.repository.owner.id == github.event.sender.id }}
 
     steps:
@@ -114,13 +112,13 @@ jobs:
           sudo -E apt-get -y purge \
             azure-cli ghc* zulu* llvm* firefox google* dotnet* \
             powershell openjdk* mongodb* moby* 2>/dev/null || true
-          # host 是 x86_64，pacstrap 在 docker archlinux:amd64 容器内跑
-          # binfmt 用 tonistiigi/binfmt 镜像注册（docker run --privileged），
-          # 不需要在 host 上装 qemu-user-static 包
+          # arch-chroot 来自 arch-install-scripts（host 是 arm64，arch-chroot arm64 rootfs 原生无需 binfmt）
+          # bsdtar 来自 libarchive-tools（解压 ALARM tarball 必需，保留 capability xattr）
           sudo -E apt-get -y install \
             parted e2fsprogs dosfstools btrfs-progs \
             u-boot-tools uuid-runtime openssl pigz \
-            git curl wget xz-utils lz4 zstd pv jq rsync
+            git curl wget xz-utils lz4 zstd pv jq rsync \
+            arch-install-scripts libarchive-tools
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get clean
           sudo -E timedatectl set-timezone "${TZ}"
@@ -141,7 +139,7 @@ jobs:
           else
             echo "BUILD_ROOTFS=true"  >> "${GITHUB_ENV}"
             echo "ROOTFS_URL="        >> "${GITHUB_ENV}"
-            echo "▶ 模式：自建 rootfs (pacstrap via docker archlinux)"
+            echo "▶ 模式：自建 rootfs (ALARM tarball + arch-chroot + 精简)"
           fi
 
           echo "status=success" >> "${GITHUB_OUTPUT}"
@@ -166,9 +164,8 @@ jobs:
           echo "可用空间: $(df -h /builder | tail -1 | awk '{print $4}')"
 
       # ── 3A. 自建 rootfs（rootfs_url 为空时执行）──────────────────────
-      # pacstrap 从零构建 ALARM aarch64 rootfs（对齐 debian 的 debootstrap）
-      # host 是 x86_64，docker pull archlinux:amd64（只有 amd64 manifest）
-      # 用 tonistiigi/binfmt 注册 aarch64 binfmt，让容器内能 chroot 进 arm64 rootfs
+      # 下载 ALARM 官方 aarch64 rootfs tarball，arch-chroot 进去装包 + 精简
+      # ubuntu-24.04-arm 是 arm64 host + ALARM aarch64 rootfs，arch-chroot 原生无需 binfmt
       - name: Build Arch rootfs
         id: build_rootfs
         if: ${{ steps.init.outputs.status == 'success' && env.BUILD_ROOTFS == 'true' && !cancelled() }}
@@ -177,18 +174,93 @@ jobs:
 
           sudo mkdir -p "${ROOTFS_DIR}"
 
-          # ── 注册 aarch64 binfmt ──────────────────────────────────────
-          # tonistiigi/binfmt 是社区标准做法，在 host kernel 注册 binfmt_misc，
-          # interpreter 自动安装到 host /usr/bin/qemu-aarch64-static。
-          # 注册后 host 和所有 docker 容器都能透明运行 arm64 binary。
-          echo "▶ 注册 aarch64 binfmt..."
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          # ── chroot helper ──────────────────────────────────────────────
+          # 不用 arch-chroot：它内部 `mount --bind $rootfs $rootfs + --make-private`，
+          # 会让 pacman 在 chroot 内找不到 cachedir 挂载点，报：
+          #   "could not determine cachedir mount point /var/cache/pacman/pkg/..."
+          #   "failed to commit transaction (not enough free disk space)"
+          # 改成手动 mount proc/sys/dev/devpts/run，不 bind rootfs 到自身。
+          mount_chroot() {
+              sudo mount -t proc     proc     "${ROOTFS_DIR}/proc"
+              sudo mount -t sysfs    sysfs    "${ROOTFS_DIR}/sys"
+              sudo mount --bind      /dev     "${ROOTFS_DIR}/dev"
+              sudo mount --bind      /dev/pts "${ROOTFS_DIR}/dev/pts"
+              sudo mount -t tmpfs    tmpfs    "${ROOTFS_DIR}/run"
+          }
+          umount_chroot() {
+              sudo umount -R "${ROOTFS_DIR}/run"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/dev/pts"  2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/dev"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/sys"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/proc"     2>/dev/null || true
+          }
+          trap umount_chroot EXIT
 
-          # ── 写 ALARM pacman.conf（host 上写，挂载进容器）──────────────
-          # 指向 ALARM aarch64 仓库，Architecture=aarch64 让 pacman 下载 arm64 包
-          # 多 Server 并列让 pacman 自动 failover
-          echo "▶ 写 ALARM pacman.conf..."
-          cat > /tmp/pacman-alarm.conf << 'PACMAN_EOF'
+          # ── 下载 ALARM 官方 aarch64 rootfs tarball ───────────────────
+          # GitHub runner 在国外（美东/美西），国内镜像（TUNA 等）DNS 解析不到。
+          # 用国外镜像优先，多镜像 fallback：
+          #   1. fl.us.mirror.archlinuxarm.org  — 美国迈阿密 (ALARM 官方)
+          #   2. mirror.archlinuxarm.org        — 官方 GeoIP 重定向
+          #   3. os.archlinuxarm.org            — 官方 os 子域
+          #   4. mirrors.tuna.tsinghua.edu.cn   — 清华 TUNA（备用，万一回国）
+          # 注意：mirrors.kernel.org 不含 archlinuxarm 镜像（404），勿用
+          ALARM_MIRRORS=(
+            "https://fl.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "https://mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz"
+          )
+
+          downloaded=0
+          for url in "${ALARM_MIRRORS[@]}"; do
+            echo "▶ 尝试下载: ${url}"
+            # --tries=3: 重试 3 次；--timeout=30: 单次 30s 超时；-c: 断点续传
+            if wget -q --show-progress --tries=3 --timeout=30 -c -O /tmp/alarm-rootfs.tar.gz "${url}"; then
+              downloaded=1
+              echo "▶ 下载成功: ${url}"
+              break
+            fi
+            echo "::warning::下载失败: ${url}，尝试下一个镜像"
+          done
+          [[ "${downloaded}" -eq "1" ]] || { echo "::error::所有 ALARM 镜像均下载失败"; exit 1; }
+          echo "▶ 大小: $(du -sh /tmp/alarm-rootfs.tar.gz | awk '{print $1}')"
+
+          # ── 解压：必须用 bsdtar（来自 libarchive-tools）─────────────
+          # GNU tar 不认识 LIBARCHIVE.xattr.security.capability，会丢 capability
+          # （ping 等程序会受影响）。ALARM 官方文档明确要求用 bsdtar。
+          echo "▶ 确保 bsdtar 可用..."
+          command -v bsdtar || { echo "::error::bsdtar 安装失败"; exit 1; }
+
+          echo "▶ 解压到 ${ROOTFS_DIR} (bsdtar -xpf 保留 capability xattr)..."
+          sudo bsdtar -xpf /tmp/alarm-rootfs.tar.gz -C "${ROOTFS_DIR}"
+          rm -f /tmp/alarm-rootfs.tar.gz
+          echo "▶ 解压完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+
+          # ── 配置 rootfs 的 resolv.conf，确保 chroot 内能解析 DNS ──
+          # host (ubuntu runner) 的 /etc/resolv.conf 通常是 systemd-resolved 的 stub
+          # (nameserver 127.0.0.53)，chroot 内没有 systemd-resolved 在跑，127.0.0.53:53 是死的，
+          # 会导致 pacman "Could not resolve host"。直接写真实公共 DNS 最稳。
+          echo "▶ host /etc/resolv.conf 内容（仅供诊断）:"
+          cat /etc/resolv.conf || true
+
+          echo "▶ 覆盖 rootfs /etc/resolv.conf → 公共 DNS..."
+          sudo tee "${ROOTFS_DIR}/etc/resolv.conf" > /dev/null << 'RESOLV_EOF'
+          nameserver 8.8.8.8
+          nameserver 8.8.4.4
+          nameserver 1.1.1.1
+          nameserver 2606:4700:4700::1111
+          RESOLV_EOF
+          sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/resolv.conf"
+
+          # 注：实际系统启动后 systemd-resolved / NetworkManager 会重写 /etc/resolv.conf，
+          # 这里的公共 DNS 只在构建期 chroot 内生效，不影响最终系统行为。
+
+          # ── 覆盖 pacman.conf，每个仓库配多个 Server（pacman 自动 failover）──
+          # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向）。
+          # GitHub runner 在国外，国外镜像可达性最好。多 Server 并列让 pacman 自动切换。
+          # 顺序：美东/美西 → 官方 GeoIP → 欧洲 → 国内（兜底）
+          echo "▶ 覆盖 /etc/pacman.conf → 多国外镜像..."
+          sudo tee "${ROOTFS_DIR}/etc/pacman.conf" > /dev/null << 'PACMAN_EOF'
           [options]
           Architecture = aarch64
           SigLevel = Required DatabaseOptional
@@ -223,117 +295,144 @@ jobs:
           Server = https://fr.mirror.archlinuxarm.org/$arch/$repo
           Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
           PACMAN_EOF
-          sed -i 's/^[[:space:]]*//' /tmp/pacman-alarm.conf
+          # 去掉 heredoc 缩进（上面为可读性缩进了 10 空格）
+          sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/pacman.conf"
 
-          # ── 写 chroot 内配置脚本（挂载进 rootfs，arch-chroot 执行）──────
-          # 独立文件避免 docker bash -c 嵌套引号问题
-          # ${TZ_VAL}/${HOSTNAME_VAL} 是字面量，arch-chroot 执行时 shell 展开
-          # （arch-chroot 继承容器主 shell 环境，docker -e 传入的变量可见）
-          sudo mkdir -p "${ROOTFS_DIR}/tmp"
-          cat > /tmp/chroot-config.sh << 'CHROOT_EOF'
-          #!/bin/bash
-          set -e
-          # 验证关键包
-          for p in openssh networkmanager rsync; do
-            pacman -Qi ${p} >/dev/null 2>&1 || { echo "ERROR: 关键包 ${p} 安装失败"; exit 1; }
-          done
-          # 卸载内核包（内核来自 ophub tarball，base 组理论上不含，但保险起见）
-          pacman -Rns --noconfirm linux linux-aarch64 linux-firmware 2>/dev/null || true
-          # 清缓存
-          pacman -Sc --noconfirm >/dev/null 2>&1 || true
-          # 时区
-          ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
-          # locale
-          sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
-          locale-gen
-          echo 'LANG=en_US.UTF-8' > /etc/locale.conf
-          # hostname
-          echo "${HOSTNAME_VAL}" > /etc/hostname
-          # SSH
-          sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-          sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          # enable 服务
-          systemctl enable sshd
-          systemctl enable NetworkManager
-          systemctl enable NetworkManager-dispatcher
-          systemctl enable systemd-timesyncd
-          systemctl enable nftables               2>/dev/null || true
-          # disable 不需要的服务
-          systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
-          systemctl disable systemd-pstore.service             2>/dev/null || true
-          CHROOT_EOF
-          sed -i 's/^[[:space:]]*//' /tmp/chroot-config.sh
-          sudo cp /tmp/chroot-config.sh "${ROOTFS_DIR}/tmp/chroot-config.sh"
-          sudo chmod +x "${ROOTFS_DIR}/tmp/chroot-config.sh"
+          echo "▶ pacman.conf 内容:"
+          grep -E '^(Server|Architecture|\[)' "${ROOTFS_DIR}/etc/pacman.conf"
 
-          # ── docker run archlinux:amd64，pacstrap 从零构建 ─────────────
-          # --privileged: 继承 host 的 binfmt 注册（qemu-aarch64-static）
-          # 挂载 $ROOTFS_DIR:/rootfs，pacstrap 直接写到 host 目录
-          # -e 传环境变量进容器，arch-chroot 继承
-          echo "▶ docker pacstrap 从零构建 ALARM aarch64 rootfs..."
-          docker run --rm --privileged \
-            -v "${ROOTFS_DIR}:/rootfs" \
-            -v /tmp/pacman-alarm.conf:/etc/pacman-alarm.conf:ro \
-            -e TZ_VAL="${TZ_VAL}" \
-            -e HOSTNAME_VAL="${HOSTNAME_VAL}" \
-            -e EXTRA_PKGS="${EXTRA_PKGS}" \
-            archlinux:amd64 bash -c '
-              set -euo pipefail
+          # ── 初始化 keyring + 装基础包 ────────────────────────────────
+          # 不装 linux 内核包（内核来自 ophub tarball）
+          # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
+          # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
+          echo "▶ mount chroot 挂载点..."
+          mount_chroot
 
-              # 装 pacstrap（arch-install-scripts 包提供）
-              pacman -Sy --noconfirm --needed arch-install-scripts
+          echo "▶ 精简前 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
-              # pacstrap 从零构建 arm64 rootfs
-              # -K: 初始化 keyring（chroot 内跑 pacman-key，arm64 binary，binfmt 转译）
-              # -C: 指定 pacman.conf（指向 ALARM aarch64 仓库）
-              # Architecture=aarch64 让 pacman 下载 arm64 包
-              # 不装 linux 内核包（base 组 2020 年后不含 linux，内核来自 ophub）
-              # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
-              # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
-              pacstrap -K -C /etc/pacman-alarm.conf /rootfs \
-                base \
-                openssh sudo curl wget ca-certificates tzdata \
-                iproute2 networkmanager \
-                net-tools iputils bind \
-                wireless_tools wpa_supplicant wireless-regdb \
-                bash-completion htop nano nftables bc \
-                uboot-tools parted \
-                btrfs-progs e2fsprogs dosfstools \
-                lsof file procps-ng cronie \
-                rsync logrotate
+          echo "▶ 初始化 pacman keyring + 安装基础包..."
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            set -e
+            pacman-key --init
+            pacman-key --populate archlinuxarm
+            pacman -Sy --noconfirm --needed \
+              openssh sudo curl wget ca-certificates tzdata \
+              iproute2 networkmanager \
+              net-tools iputils bind \
+              wireless_tools wpa_supplicant wireless-regdb \
+              bash-completion htop nano nftables bc \
+              uboot-tools parted \
+              btrfs-progs e2fsprogs dosfstools \
+              lsof file procps-ng cronie \
+              rsync logrotate
 
-              # 额外包（可选）
-              if [[ -n "${EXTRA_PKGS}" ]]; then
-                echo "▶ 安装额外包: ${EXTRA_PKGS}"
-                pacstrap -C /etc/pacman-alarm.conf /rootfs ${EXTRA_PKGS}
-              fi
+            # 验证关键包
+            for p in openssh networkmanager rsync; do
+              pacman -Qi \${p} >/dev/null 2>&1 || { echo \"ERROR: 关键包 \${p} 安装失败\"; exit 1; }
+            done
+          "
 
-              # 写 resolv.conf（chroot 内能解析 DNS）
-              echo "nameserver 8.8.8.8" > /rootfs/etc/resolv.conf
-              echo "nameserver 1.1.1.1" >> /rootfs/etc/resolv.conf
+          # ── 额外包（可选）────────────────────────────────────────────
+          if [[ -n "${EXTRA_PKGS}" ]]; then
+            echo "▶ 安装额外包: ${EXTRA_PKGS}"
+            sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+              pacman -Sy --noconfirm --needed ${EXTRA_PKGS}
+            "
+          fi
 
-              # arch-chroot 执行配置脚本（arm64 binary，binfmt 转译）
-              arch-chroot /rootfs /bin/bash /tmp/chroot-config.sh
-            '
+          # ── 精简 rootfs ────────────────────────────────────────────────
+          # 目标：从 2.2G 压到 ~700-900M，与 debian rootfs 量级相当
+          # 1. 卸载不需要的预装包（内核/firmware/gcc 工具链等，内核来自 ophub）
+          # 2. 清 pacman 包缓存（保留当前版本的回滚包可选，全清更小）
+          # 3. 删除文档/man/info/locale（只留 en_US、zh_CN、zh_TW）
+          # 4. 清空日志
+          echo "▶ 精简 rootfs..."
 
-          # 清理 chroot 脚本
-          sudo rm -f "${ROOTFS_DIR}/tmp/chroot-config.sh"
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            set -e
+            echo '  → 卸载不需要的预装包...'
+            # linux-aarch64: ALARM 预装内核，内核来自 ophub tarball，卸掉
+            # linux-firmware: 巨大（数百 MB），panther-x2 的 wifi/bt 固件 ophub 会注入或已内置
+            #                 保守起见保留 linux-firmware，只卸 kernels
+            # base-devel: gcc/make 等，普通用户不需要（要编译时再装）
+            # hardlink: ALARM 装的重复文件合并工具，无用
+            pacman -Rns --noconfirm \
+              linux-aarch64 \
+              linux-aarch64-headers \
+              gcc gcc-libs binutils make patch pkgconf fakeroot \
+              hardlink \
+              2>/dev/null || true
+            # 二次清理：列出仍存在的孤立包（被卸载包的依赖现在没人用）
+            orphans=\$(pacman -Qdtq 2>/dev/null || true)
+            [[ -n \"\${orphans}\" ]] && pacman -Rns --noconfirm \${orphans} 2>/dev/null || true
 
-          # ── host 上做剩余文件操作（不需要 chroot）─────────────────────
-          # root 密码
-          ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
-          sudo sed -i "s|^root:[^:]*|root:${ROOT_HASH}|" "${ROOTFS_DIR}/etc/shadow"
+            echo '  → 清 pacman 包缓存...'
+            pacman -Sc --noconfirm >/dev/null 2>&1 || true
+            # 清掉所有下载的包文件（/var/cache/pacman/pkg/*.pkg.tar.*）
+            rm -rf /var/cache/pacman/pkg/*
 
-          # hosts
+            echo '  → 清空日志...'
+            # 保留目录结构，清空文件内容
+            find /var/log -type f -exec truncate -s 0 {} \; 2>/dev/null || true
+            # 删除 journald 日志（运行时重新生成）
+            rm -rf /var/log/journal/*
+
+            echo '  → 删除文档/man/info...'
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/info/*
+            rm -rf /usr/share/gtk-doc/*
+            rm -rf /usr/share/readline/*
+
+            echo '  → 精简 locale（只留 en_US、zh_CN、zh_TW）...'
+            # 删除非需要的 locale 文件
+            find /usr/share/locale -type f \
+              ! -name 'en_US*' ! -name 'zh_CN*' ! -name 'zh_TW*' \
+              ! -name 'locale.alias' \
+              -delete 2>/dev/null || true
+            # 删除空的 locale 目录
+            find /usr/share/locale -type d -empty -delete 2>/dev/null || true
+
+            echo '  → 删除 i18n（保留 C/POSIX）...'
+            find /usr/share/i18n -type f \
+              ! -name 'C*' ! -name 'POSIX*' ! -name 'i18n*' \
+              -delete 2>/dev/null || true
+
+            echo '  → 清理临时文件...'
+            rm -rf /tmp/* /var/tmp/*
+            rm -rf /var/lib/pacman/sync/*
+          "
+          echo "▶ 精简后 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+
+          # ── 时区 / locale / hostname ──────────────────────────────────
+          sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
+          sudo chroot "${ROOTFS_DIR}" bash -c "
+            sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
+            locale-gen
+            echo 'LANG=en_US.UTF-8' > /etc/locale.conf
+          "
+
+          echo "${HOSTNAME_VAL}" | sudo tee "${ROOTFS_DIR}/etc/hostname" > /dev/null
           printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\tlocalhost ip6-localhost ip6-loopback\n' \
             "${HOSTNAME_VAL}" | sudo tee "${ROOTFS_DIR}/etc/hosts" > /dev/null
 
-          # 网络（纯 NetworkManager，无 netplan）
+          # ── SSH ───────────────────────────────────────────────────────
+          # Arch 默认 sshd_config 已基本可用，仅开启 PermitRootLogin yes 和 PasswordAuthentication yes
+          sudo mkdir -p -m 0755 "${ROOTFS_DIR}/var/run/sshd" 2>/dev/null || \
+            sudo mkdir -p -m 0755 "${ROOTFS_DIR}/run/sshd"
+          sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/'             "${ROOTFS_DIR}/etc/ssh/sshd_config"
+          sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' "${ROOTFS_DIR}/etc/ssh/sshd_config"
+
+          # ── root 密码 ─────────────────────────────────────────────────
+          ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
+          sudo sed -i "s|^root:[^:]*|root:${ROOT_HASH}|" "${ROOTFS_DIR}/etc/shadow"
+
+          # ── 网络（纯 NetworkManager，无 netplan）──────────────────────
           sudo mkdir -p "${ROOTFS_DIR}/etc/NetworkManager"
           echo 'W21haW5dCnBsdWdpbnM9aWZ1cGRvd24sa2V5ZmlsZQpkaGNwPWludGVybmFsCltpZnVwZG93bl0KbWFuYWdlZD10cnVlCg==' \
             | base64 -d | sudo tee "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf" > /dev/null
 
-          # systemd 超时
+          # ── systemd 超时 ──────────────────────────────────────────────
           SYS_CONF="${ROOTFS_DIR}/etc/systemd/system.conf"
           [[ -f "${SYS_CONF}" ]] && {
             sudo sed -i "s|^#*DefaultTimeoutStartSec.*|DefaultTimeoutStartSec=10s|g" "${SYS_CONF}"
@@ -371,6 +470,28 @@ jobs:
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
 
+          # ── enable 服务（在 chroot 内用 systemctl，需要 proc/sys/dev 已 mount）──
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            systemctl enable sshd
+            systemctl enable NetworkManager
+            systemctl enable NetworkManager-dispatcher
+            systemctl enable systemd-timesyncd
+            systemctl enable nftables               2>/dev/null || true
+            systemctl enable arch-firstrun.service
+            systemctl enable arch-ramlog.service
+            systemctl enable arch-hardware-optimize.service
+            systemctl enable arch-resize-filesystem.service
+            systemctl enable arch-zram-config.service
+
+            # disable 不需要的服务
+            systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+            systemctl disable systemd-pstore.service             2>/dev/null || true
+          "
+
+          # ── 卸载 chroot 挂载点 ────────────────────────────────────────
+          umount_chroot
+          trap - EXIT
+
           # ── fstab ─────────────────────────────────────────────────────
           printf 'LABEL=ROOTFS\t/\text4\tdefaults,noatime,nodiratime,commit=600,errors=remount-ro\t0 1\n' \
             | sudo tee    "${ROOTFS_DIR}/etc/fstab" > /dev/null
@@ -384,8 +505,10 @@ jobs:
           #   release_codeid   ← ^ID=...
           #   release_codename ← ^VERSION_CODENAME=...
           # 任一为空就报 "The [ etc/os-release: ... ] is invalid." 并退出。
-          # 从零构建的 rootfs 默认 /etc/os-release 是符号链接 → /usr/lib/os-release，
-          # Arch 是滚动发布无版本代号。写一个完整的 os-release 满足 rebuild 检查。
+          # ALARM rootfs 默认 /etc/os-release 是符号链接 → /usr/lib/os-release，
+          # 且内容没有 VERSION_CODENAME（Arch 是滚动发布，无版本代号）。
+          # Debian/Ubuntu rootfs 自带 VERSION_CODENAME=bookworm/noble 所以能过。
+          # 这里写一个完整的 os-release，覆盖符号链接，满足 rebuild 检查。
           echo "▶ 写 /etc/os-release（满足 rebuild 的 ID/VERSION_CODENAME 检查）..."
           sudo rm -f "${ROOTFS_DIR}/etc/os-release"
           sudo tee "${ROOTFS_DIR}/etc/os-release" > /dev/null << 'OSREL_EOF'
@@ -402,12 +525,13 @@ jobs:
           BUG_REPORT_URL="https://github.com/archlinuxarm/PKGBUILDs/issues"
           OSREL_EOF
           sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/os-release"
+          # 同步覆盖 /usr/lib/os-release（避免符号链接残留导致不一致）
           sudo cp "${ROOTFS_DIR}/etc/os-release" "${ROOTFS_DIR}/usr/lib/os-release"
 
           echo "▶ /etc/os-release 内容:"
           cat "${ROOTFS_DIR}/etc/os-release"
 
-          echo "▶ rootfs 完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+          echo "▶ rootfs 最终大小: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
           echo "status=success" >> "${GITHUB_OUTPUT}"
 
       # ── 3B. 打包 rootfs tar.gz（仅自建模式）─────────────────────────
@@ -498,7 +622,7 @@ jobs:
 
       # ── 5. Rebuild：注入内核 + uboot + 平台文件 ──────────────────────
       # rebuild 的 -s 参数控制新镜像分区大小：-s boot_mb/root_mb
-      # 从零构建的 rootfs 约 400-600MiB（base + 基础包），动态计算 root_mb 保险
+      # 精简后 rootfs 约 700-900MiB，动态计算 root_mb 保险
       - name: Rebuild image
         id: rebuild
         if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
