@@ -315,41 +315,10 @@ jobs:
             pacman -Sy --noconfirm
           "
 
-          # ── 第一步：先卸载 ALARM tarball 自带、但我们不需要的预装包 ──
-          # 顺序很关键：必须在装我们要的包【之前】做这一步。
-          # 原因：ALARM 官方 tarball 是完整系统，不是空目录，天生带了一整套
-          # base 组周边工具（内核、firmware、磁盘管理工具等）。
-          # 如果按"先装需要的包 → 再卸不需要的包"的顺序，卸载阶段要么要
-          # 精确判断"这个包会不会被后面装的包依赖"（容易误伤），要么用
-          # pacman -Qdtq 清孤儿包时把本该保留的依赖也带走。
-          # 反过来"先卸不需要的 → 再装需要的"，即使这里卸多了、卸到了
-          # 后面清单里要用的包的依赖，pacman -S --needed 也会在下一步
-          # 自动把缺失的依赖重新装回来，不会漏装；而且不需要的东西已经
-          # 提前清空，最终 rootfs 里"有什么"完全由下面的安装清单决定，
-          # 跟 debian debootstrap 的精简逻辑对齐。
-          # 注：pacman/glibc/filesystem 等核心包被其他包依赖，pacman 会
-          # 拒绝卸载，不用特意排除，交给 --noconfirm + || true 兜底跳过即可。
-          #
-          # 下面的清单基于实际 inspect workflow 跑出的 `pacman -Qi` 全量数据
-          # （2026-07-25），而不是猜测，因此列的都是 ALARM 官方 rootfs 里
-          # 确实存在的包。原先脚本里的 gcc/man-db/lvm2/mdadm/reflector/
-          # s-nail/usbutils 等经核实 ALARM base 组根本没装，属于无效条目，
-          # 已按实测数据删除。
-          #
-          # 重要修复（2026-07-25 用户实测发现）：
-          # 之前所有卸载命令统一用 \`2>/dev/null || true\` 吞掉报错，导致
-          # 一批命令里只要有一个包卸载失败，pacman -Rns 会把整批操作当成
-          # 一个事务全部回滚，但因为报错被吞掉，构建日志显示"精简完成"，
-          # 实际很多包根本没删掉（用户设备上 pacman -Qi 验证 linux-aarch64/
-          # vim/cryptsetup 的 Install Date 都停留在 rootfs 构建当天，说明
-          # 卸载从未生效）。具体原因：
-          #   - cryptsetup: Required By = systemd，是 systemd 的硬依赖，
-          #     pacman 从设计上就不允许卸载，写进清单本身就是错的，直接
-          #     去掉这一条（3.56MiB，不值得为了这点空间冒风险动 systemd 依赖）
-          #   - vim: Required By = ex-vi-compat，两者在同一条命令里一起卸，
-          #     必须先卸依赖方 ex-vi-compat 再卸 vim，顺序反了会导致整批失败
-          # 现在每一批卸载都去掉静默吞错，卸完立刻用 pacman -Qi 验证，
-          # 真失败会在构建日志里显式报错，不会再悄悄跳过。
+          echo '▶ 执行 pacman -Syu 全量更新...'
+          sudo chroot "${ROOTFS_DIR}" /usr/bin/pacman -Syu --noconfirm --needed
+          echo '▶ 更新完成，rootfs 当前大小: '"$(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+          
           echo "▶ 卸载 ALARM 预装、但用不到的包..."
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
@@ -365,12 +334,6 @@ jobs:
               return \${failed}
             }
 
-            # ── firmware：实测占 950MiB，是最大的一块（约占原始 rootfs 45%）──
-            # 全部是 x86 / 独立显卡 / 桌面网卡的固件（Intel/Nvidia/AMD GPU、
-            # Atheros/Realtek/Broadcom/MediaTek 网卡等），RK3566 (panther-x2)
-            # 用不到，wifi/bt 固件由 ophub 内核包注入。
-            # 用户已确认：不确定板载 wifi/bt 芯片型号，选择全部不留，
-            # 若烧录后 wifi/bt 无法识别，再针对具体芯片单独装回对应子包。
             echo '  → 卸载 firmware 包...'
             pacman -Rns --noconfirm \
               linux-firmware \
@@ -402,11 +365,16 @@ jobs:
               dhcpcd
             verify_removed netctl dhcpcd
 
-            # ── mkinitcpio：uInitrd 来自 ophub 预生成，这份用不上 ──
             echo '  → 卸载 mkinitcpio...'
-            pacman -Rns --noconfirm \
-              mkinitcpio \
-              mkinitcpio-busybox
+            to_remove=""
+            for pkg in mkinitcpio mkinitcpio-busybox; do
+              pacman -Qq "${pkg}" &>/dev/null && to_remove="${to_remove} ${pkg}"
+            done
+            if [[ -n "${to_remove}" ]]; then
+              pacman -Rns --noconfirm ${to_remove}
+            else
+              echo "    (已不存在，跳过)"
+            fi
             verify_removed mkinitcpio mkinitcpio-busybox
 
             # ── vim：先卸依赖它的 ex-vi-compat，再卸 vim 本体，顺序不能反 ──
@@ -419,33 +387,18 @@ jobs:
             pacman -Rns --noconfirm vim vim-runtime
             verify_removed vim vim-runtime
 
-            # ── pciutils/gpm：确认存在但用不上 ──
-            # pciutils: PCI 调试工具；gpm: 控制台鼠标支持，服务器用不上
-            # 注：cryptsetup 已从清单中移除 —— 它是 systemd 的硬依赖
-            # (Required By: systemd)，pacman 从设计上就不允许卸载，之前
-            # 写在清单里只会导致这条命令报错、进而拖累同批次其他包一起
-            # 卸载失败，3.56MiB 不值得为此风险，保留不动
             echo '  → 卸载 pciutils / gpm...'
             pacman -Rns --noconfirm \
               pciutils \
               gpm
             verify_removed pciutils gpm
 
-            # 清一遍孤儿包（此时装我们要的包之前清，同理：装包阶段 pacman
-            # 会把真正需要的依赖重新拉回来，这里清得激进也不会漏装）
             echo '  → 清理孤儿包...'
             orphans=\$(pacman -Qdtq 2>/dev/null || true)
             [[ -n \"\${orphans}\" ]] && pacman -Rns --noconfirm \${orphans} || true
           "
 
           echo "▶ 卸载不需要的包后 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
-
-          # ── 第二步：安装我们需要的包 ──────────────────────────────────
-          # 不装 linux 内核包（内核来自 ophub tarball）
-          # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
-          # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
-          # 用 --needed：已存在的包（比如系统自带的 systemd/bash 等核心依赖）跳过，
-          # 缺失的（包括第一步卸掉后其实还需要的依赖）会被 pacman 自动装回
           echo "▶ 安装需要的基础包..."
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
