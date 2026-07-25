@@ -175,6 +175,28 @@ jobs:
 
           sudo mkdir -p "${ROOTFS_DIR}"
 
+          # ── chroot helper ──────────────────────────────────────────────
+          # 不用 arch-chroot：它内部 `mount --bind $rootfs $rootfs + --make-private`，
+          # 会让 pacman 在 chroot 内找不到 cachedir 挂载点，报：
+          #   "could not determine cachedir mount point /var/cache/pacman/pkg/..."
+          #   "failed to commit transaction (not enough free disk space)"
+          # 改成手动 mount proc/sys/dev/devpts/run，不 bind rootfs 到自身。
+          mount_chroot() {
+              sudo mount -t proc     proc     "${ROOTFS_DIR}/proc"
+              sudo mount -t sysfs    sysfs    "${ROOTFS_DIR}/sys"
+              sudo mount --bind      /dev     "${ROOTFS_DIR}/dev"
+              sudo mount --bind      /dev/pts "${ROOTFS_DIR}/dev/pts"
+              sudo mount -t tmpfs    tmpfs    "${ROOTFS_DIR}/run"
+          }
+          umount_chroot() {
+              sudo umount -R "${ROOTFS_DIR}/run"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/dev/pts"  2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/dev"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/sys"      2>/dev/null || true
+              sudo umount -R "${ROOTFS_DIR}/proc"     2>/dev/null || true
+          }
+          trap umount_chroot EXIT
+
           # ── 下载 ALARM 官方 aarch64 rootfs tarball ───────────────────
           # 镜像优先级（按可用性排序）：
           #   1. 清华 TUNA  — 国内最快，HTTPS 稳定
@@ -199,9 +221,15 @@ jobs:
           [[ "${downloaded}" -eq "1" ]] || { echo "::error::所有 ALARM 镜像均下载失败"; exit 1; }
           echo "▶ 大小: $(du -sh /tmp/alarm-rootfs.tar.gz | awk '{print $1}')"
 
-          echo "▶ 解压到 ${ROOTFS_DIR}..."
-          # -p: 保留权限；--xattrs: 保留扩展属性（ALARM 官方文档要求）
-          sudo tar -xpf /tmp/alarm-rootfs.tar.gz --xattrs -C "${ROOTFS_DIR}"
+          # ── 解压：必须用 bsdtar（来自 libarchive-tools）─────────────
+          # GNU tar 不认识 LIBARCHIVE.xattr.security.capability，会丢 capability
+          # （ping 等程序会受影响）。ALARM 官方文档明确要求用 bsdtar。
+          echo "▶ 确保 bsdtar 可用..."
+          sudo apt-get -y install --no-install-recommends libarchive-tools >/dev/null
+          command -v bsdtar || { echo "::error::bsdtar 安装失败"; exit 1; }
+
+          echo "▶ 解压到 ${ROOTFS_DIR} (bsdtar -xpf 保留 capability xattr)..."
+          sudo bsdtar -xpf /tmp/alarm-rootfs.tar.gz -C "${ROOTFS_DIR}"
           rm -f /tmp/alarm-rootfs.tar.gz
           echo "▶ 解压完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
@@ -215,12 +243,14 @@ jobs:
             "${ROOTFS_DIR}/etc/pacman.conf"
 
           # ── 初始化 keyring + 装基础包 ────────────────────────────────
-          # arch-chroot 由 arch-install-scripts 提供，自动 mount proc/sys/dev/run
           # 不装 linux 内核包（内核来自 ophub tarball）
           # 不装 mkinitcpio（uInitrd 来自 ophub 预生成）
           # 不装 chrony（用 systemd-timesyncd，已包含在 systemd）
+          echo "▶ mount chroot 挂载点..."
+          mount_chroot
+
           echo "▶ 初始化 pacman keyring + 安装基础包..."
-          sudo arch-chroot "${ROOTFS_DIR}" /bin/bash -c "
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
             pacman-key --init
             pacman-key --populate archlinuxarm
@@ -246,15 +276,15 @@ jobs:
           # ── 额外包（可选）────────────────────────────────────────────
           if [[ -n "${EXTRA_PKGS}" ]]; then
             echo "▶ 安装额外包: ${EXTRA_PKGS}"
-            sudo arch-chroot "${ROOTFS_DIR}" /bin/bash -c "
+            sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
               pacman -Sy --noconfirm --needed ${EXTRA_PKGS}
               pacman -Sc --noconfirm >/dev/null 2>&1 || true
             "
           fi
 
           # ── 时区 / locale / hostname ──────────────────────────────────
-          sudo arch-chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
-          sudo arch-chroot "${ROOTFS_DIR}" bash -c "
+          sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
+          sudo chroot "${ROOTFS_DIR}" bash -c "
             sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
             locale-gen
             echo 'LANG=en_US.UTF-8' > /etc/locale.conf
@@ -317,21 +347,27 @@ jobs:
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
 
-          # ── enable 服务 ───────────────────────────────────────────────
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable sshd
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable NetworkManager
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable NetworkManager-dispatcher
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable systemd-timesyncd
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable nftables          2>/dev/null || true
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable arch-firstrun.service
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable arch-ramlog.service
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable arch-hardware-optimize.service
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable arch-resize-filesystem.service
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl enable arch-zram-config.service
+          # ── enable 服务（在 chroot 内用 systemctl，需要 proc/sys/dev 已 mount）──
+          sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
+            systemctl enable sshd
+            systemctl enable NetworkManager
+            systemctl enable NetworkManager-dispatcher
+            systemctl enable systemd-timesyncd
+            systemctl enable nftables               2>/dev/null || true
+            systemctl enable arch-firstrun.service
+            systemctl enable arch-ramlog.service
+            systemctl enable arch-hardware-optimize.service
+            systemctl enable arch-resize-filesystem.service
+            systemctl enable arch-zram-config.service
 
-          # ── disable 不需要的服务 ──────────────────────────────────────
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
-          sudo arch-chroot "${ROOTFS_DIR}" systemctl disable systemd-pstore.service             2>/dev/null || true
+            # disable 不需要的服务
+            systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+            systemctl disable systemd-pstore.service             2>/dev/null || true
+          "
+
+          # ── 卸载 chroot 挂载点 ────────────────────────────────────────
+          umount_chroot
+          trap - EXIT
 
           # ── fstab ─────────────────────────────────────────────────────
           printf 'LABEL=ROOTFS\t/\text4\tdefaults,noatime,nodiratime,commit=600,errors=remount-ro\t0 1\n' \
