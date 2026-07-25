@@ -334,25 +334,13 @@ jobs:
             echo '  → 卸载内核包...'
             pacman -Rns --noconfirm \
               linux-aarch64
-            verify_removed linux-aarch64
+            verify_removed linux-aarch64 mkinitcpio mkinitcpio-busybox
 
             echo '  → 卸载 netctl/dhcpcd...'
             pacman -Rns --noconfirm \
               netctl \
               dhcpcd
             verify_removed netctl dhcpcd
-
-            echo '  → 卸载 mkinitcpio...'
-            to_remove=""
-            for pkg in mkinitcpio mkinitcpio-busybox; do
-              pacman -Qq "${pkg}" &>/dev/null && to_remove="${to_remove} ${pkg}"
-            done
-            if [[ -n "${to_remove}" ]]; then
-              pacman -Rns --noconfirm ${to_remove}
-            else
-              echo "    (已不存在，跳过)"
-            fi
-            verify_removed mkinitcpio mkinitcpio-busybox
 
             echo '  → 卸载 ex-vi-compat（vim 的依赖方，必须先卸）...'
             pacman -Rns --noconfirm ex-vi-compat
