@@ -334,15 +334,11 @@ jobs:
               linux-firmware-radeon
             verify_removed linux-firmware linux-firmware-intel linux-firmware-nvidia
 
-            # ── 内核：实测 linux-aarch64 337MiB + /usr/lib/modules 187MiB ──
-            # 内核来自 ophub tarball，这份用不上
             echo '  → 卸载内核包...'
             pacman -Rns --noconfirm \
               linux-aarch64
             verify_removed linux-aarch64
 
-            # ── 网络管理：ALARM 默认装的是 netctl + dhcpcd，实际用 NetworkManager ──
-            # netctl/dhcpcd 是 explicit 安装的包，确认存在，卸掉换成后面装的 networkmanager
             echo '  → 卸载 netctl/dhcpcd...'
             pacman -Rns --noconfirm \
               netctl \
@@ -361,8 +357,6 @@ jobs:
             fi
             verify_removed mkinitcpio mkinitcpio-busybox
 
-            # ── vim：先卸依赖它的 ex-vi-compat，再卸 vim 本体，顺序不能反 ──
-            # （之前把 vim 和 ex-vi-compat 放同一条命令导致依赖冲突、整批回滚）
             echo '  → 卸载 ex-vi-compat（vim 的依赖方，必须先卸）...'
             pacman -Rns --noconfirm ex-vi-compat
             verify_removed ex-vi-compat
@@ -403,21 +397,10 @@ jobs:
             done
           "
 
-          # ── 额外包（可选）────────────────────────────────────────────
-          if [[ -n "${EXTRA_PKGS}" ]]; then
-            echo "▶ 安装额外包: ${EXTRA_PKGS}"
-            sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
-              pacman -Sy --noconfirm --needed ${EXTRA_PKGS}
-            "
-          fi
-
-          # ── 第三步：收尾清理（此时包清单已经最终确定，只清垃圾文件，
-          #    不再卸包，避免碰到刚装好的东西）──────────────────────────
-          # 1. 清 pacman 包缓存 + 数据库同步缓存 + pacman 日志
-          # 2. 删除文档/man/info/locale（只留 en_US、zh_CN、zh_TW）
-          # 3. 清空日志、清 root 家目录残留
+          echo "▶ 执行 pacman -Syu 全量更新..."
+          sudo chroot "${ROOTFS_DIR}" pacman -Syu --noconfirm --needed
+          
           echo "▶ 收尾清理..."
-
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             set -e
             echo '  → 清 pacman 包缓存...'
@@ -460,12 +443,6 @@ jobs:
           sudo du -h --max-depth=3 "${ROOTFS_DIR}/usr" 2>/dev/null | sort -rh | head -20 || true
 
           # ── 时区 / locale / hostname ──────────────────────────────────
-          # 注意：删除 /usr/share/i18n 下的 locale 源文件必须放在 locale-gen
-          # 之后！/usr/share/i18n/locales/en_US 等是 locale-gen 编译
-          # en_US.UTF-8 时读取的源定义文件，如果提前删掉（之前版本曾把这一步
-          # 放在收尾清理里，早于 locale-gen 执行），locale-gen 会因为找不到
-          # 源文件而生成失败，导致最终系统登录时报
-          # "setlocale: LC_CTYPE: cannot change locale (en_US.UTF-8): No such file or directory"。
           sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
           sudo chroot "${ROOTFS_DIR}" bash -c "
             sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
@@ -477,8 +454,6 @@ jobs:
             echo 'LANG=en_US.UTF-8' > /etc/locale.conf
           "
 
-          # locale-gen 已完成，此时才能安全删除 i18n 源文件（只留 C/POSIX，
-          # 运行时不再需要 en_US/zh_CN/zh_TW 的源定义，已编译进 /usr/lib/locale）
           echo "▶ 清理 locale-gen 用剩的 i18n 源文件..."
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             find /usr/share/i18n -type f \
