@@ -305,6 +305,10 @@ jobs:
           echo "▶ mount chroot 挂载点..."
           mount_chroot
 
+          echo "▶ 执行 pacman -Syu 全量更新..."
+          sudo chroot "${ROOTFS_DIR}" pacman -Syu --noconfirm --needed
+          echo "▶ 更新完成，rootfs 当前大小: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
+
           echo "▶ 精简前 rootfs: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
           echo "▶ 初始化 pacman keyring..."
@@ -314,10 +318,6 @@ jobs:
             pacman-key --populate archlinuxarm
             pacman -Sy --noconfirm
           "
-
-          echo '▶ 执行 pacman -Syu 全量更新...'
-          sudo chroot "${ROOTFS_DIR}" /usr/bin/pacman -Syu --noconfirm --needed
-          echo '▶ 更新完成，rootfs 当前大小: '"$(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
           
           echo "▶ 卸载 ALARM 预装、但用不到的包..."
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
