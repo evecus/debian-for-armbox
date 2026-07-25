@@ -346,11 +346,6 @@ jobs:
             pacman -Rns --noconfirm ex-vi-compat
             verify_removed ex-vi-compat verify_removed vim vim-runtime
 
-            echo '  → 卸载 pciutils / gpm...'
-            pacman -Rns --noconfirm \
-              pciutils
-            verify_removed pciutils gpm
-
             echo '  → 清理孤儿包...'
             orphans=\$(pacman -Qdtq 2>/dev/null || true)
             [[ -n \"\${orphans}\" ]] && pacman -Rns --noconfirm \${orphans} || true
