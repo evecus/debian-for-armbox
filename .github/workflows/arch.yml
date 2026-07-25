@@ -673,7 +673,7 @@ jobs:
           IMG_DIR="${REBUILD_DIR}/build/output/images"
           mkdir -p "${IMG_DIR}"
 
-          IMG_NAME="Armbian_22.02.0-trunk_${ARCH_RELEASE}_arm64.img"
+          IMG_NAME="Armbian_22.02.0-trunk_${DEBIAN_RELEASE}_arm64.img"
           IMG_PATH="${IMG_DIR}/${IMG_NAME}"
 
           ROOTFS_MB=$(sudo du -sm "${ROOTFS_DIR}" | awk '{print $1}')
@@ -704,8 +704,6 @@ jobs:
           echo "status=success"        >> "${GITHUB_OUTPUT}"
 
       # ── 5. Rebuild：注入内核 + uboot + 平台文件 ──────────────────────
-      # rebuild 的 -s 参数控制新镜像分区大小：-s boot_mb/root_mb
-      # 精简后 rootfs 约 700-900MiB，动态计算 root_mb 保险
       - name: Rebuild image
         id: rebuild
         if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
@@ -719,19 +717,13 @@ jobs:
           sudo chmod +x "${REBUILD_DIR}/rebuild"
           cd "${REBUILD_DIR}"
 
-          # 动态计算 root_mb：rootfs 实际大小 + 内核/modules 空间 + 缓冲
-          ROOTFS_ACTUAL_MB=$(sudo du -sm "${ROOTFS_DIR}" | awk '{print $1}')
-          ROOT_MB=$((ROOTFS_ACTUAL_MB + 512 + 256))
-          BOOT_MB=256
-          echo "▶ rootfs 实际: ${ROOTFS_ACTUAL_MB}MiB → rebuild -s ${BOOT_MB}/${ROOT_MB}"
-
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1372 -r ophub/kernel -n ${BUILDER}"
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1324 -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
             -a true \
             -t ${FSTYPE} \
-            -s ${BOOT_MB}/${ROOT_MB} \
+            -s 256/1024 \
             -r ophub/kernel \
             -n ${BUILDER}
 
@@ -743,7 +735,6 @@ jobs:
 
           echo "PACKAGED_OUTPUTPATH=${OUTPUT_DIR}" >> "${GITHUB_ENV}"
           echo "PACKAGED_STATUS=success"           >> "${GITHUB_ENV}"
-
       # ── 6A. 发布固件 + rootfs（自建模式）────────────────────────────
       - name: Release firmware + rootfs
         uses: ncipollo/release-action@main
