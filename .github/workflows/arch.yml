@@ -348,8 +348,7 @@ jobs:
 
             echo '  → 卸载 pciutils / gpm...'
             pacman -Rns --noconfirm \
-              pciutils \
-              gpm
+              pciutils
             verify_removed pciutils gpm
 
             echo '  → 清理孤儿包...'
