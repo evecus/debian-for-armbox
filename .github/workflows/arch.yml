@@ -518,21 +518,6 @@ jobs:
           umount_chroot
           trap - EXIT
 
-          # ── 恢复 pacman.conf 为面向最终用户的配置 ────────────────────
-          # 关键：前面覆盖的多国外镜像列表（fl.us/de/fr.mirror.archlinuxarm.org +
-          # tuna）是专门为 GitHub Actions 的境外网络环境优化的构建期配置，
-          # 目的是让 pacstrap/pacman -S 在 CI 里下载够快够稳。
-          # 但这份配置如果原封不动打进最终镜像，会带来两个问题：
-          #   1. 部分镜像证书或线路本身不稳定（如实测 de/fr 证书不匹配、
-          #      tuna 返回 403），只是 CI 阶段用 Server 列表做了 failover
-          #      掩盖过去，用户实际使用时会直接暴露这些问题
-          #   2. 即使镜像本身没问题，"境外优先"的顺序对国内网络环境的用户
-          #      来说也是绕远路，micro-blocked / phillips too slow 之类的
-          #      超时很常见（用户实测 fl.us 镜像 "Operation too slow"）
-          # 打包前换回 ALARM 官方标准做法：只写单一的 GeoIP 重定向域名
-          # mirror.archlinuxarm.org，配合 pacman-mirrorlist 包，不管用户在
-          # 哪个国家/地区，DNS 都会自动解析到地理位置最近的官方镜像节点，
-          # 不需要在这里猜测最终用户的网络环境。
           echo "▶ 恢复 /etc/pacman.conf → 面向最终用户的官方 GeoIP 镜像..."
           sudo tee "${ROOTFS_DIR}/etc/pacman.conf" > /dev/null << 'PACMAN_USER_EOF'
           [options]
@@ -573,15 +558,6 @@ jobs:
 
           sudo mkdir -p "${ROOTFS_DIR}/usr/lib/modules"
 
-          # ── 写 /etc/os-release（rebuild 强制要求 ID= 和 VERSION_CODENAME=）─────
-          # ophub rebuild 在 mount 出 rootfs 后会从 etc/os-release 读这两个字段：
-          #   release_codeid   ← ^ID=...
-          #   release_codename ← ^VERSION_CODENAME=...
-          # 任一为空就报 "The [ etc/os-release: ... ] is invalid." 并退出。
-          # ALARM rootfs 默认 /etc/os-release 是符号链接 → /usr/lib/os-release，
-          # 且内容没有 VERSION_CODENAME（Arch 是滚动发布，无版本代号）。
-          # Debian/Ubuntu rootfs 自带 VERSION_CODENAME=bookworm/noble 所以能过。
-          # 这里写一个完整的 os-release，覆盖符号链接，满足 rebuild 检查。
           echo "▶ 写 /etc/os-release（满足 rebuild 的 ID/VERSION_CODENAME 检查）..."
           sudo rm -f "${ROOTFS_DIR}/etc/os-release"
           sudo tee "${ROOTFS_DIR}/etc/os-release" > /dev/null << 'OSREL_EOF'
@@ -694,14 +670,6 @@ jobs:
           echo "status=success"        >> "${GITHUB_OUTPUT}"
 
       # ── 5. Rebuild：注入内核 + uboot + 平台文件 ──────────────────────
-      # rebuild 的 -s 参数控制新镜像分区大小：-s boot_mb/root_mb
-      # 精简后 rootfs 实测稳定在 800MiB-1GiB，与 debian（256/1024 固定值）
-      # 量级相当，改回固定值：256(boot)/1280(root)。
-      # root 比 debian 的 1024 多留 256MiB 余量，覆盖 pacman 更新缓存、
-      # 日志增长、用户后续 pacman -S 装包等场景；固定值也让镜像大小
-      # 可预期，不必每次都用 du 重新计算。
-      # 若后续 rootfs 体积有较大变化（比如加了很多 extra_packages），
-      # 再手动调整这两个数字即可。
       - name: Rebuild image
         id: rebuild
         if: ${{ steps.pack.outputs.status == 'success' && !cancelled() }}
@@ -721,7 +689,7 @@ jobs:
             -k ${KERNEL} \
             -a true \
             -t ${FSTYPE} \
-            -s 256/1280 \
+            -s 256/864 \
             -r ophub/kernel \
             -n ${BUILDER}
 
