@@ -725,7 +725,7 @@ jobs:
           BOOT_MB=256
           echo "▶ rootfs 实际: ${ROOTFS_ACTUAL_MB}MiB → rebuild -s ${BOOT_MB}/${ROOT_MB}"
 
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s ${BOOT_MB}/${ROOT_MB} -r ophub/kernel -n ${BUILDER}"
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1372 -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
