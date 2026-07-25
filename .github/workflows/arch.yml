@@ -112,15 +112,23 @@ jobs:
           sudo -E apt-get -y purge \
             azure-cli ghc* zulu* llvm* firefox google* dotnet* \
             powershell openjdk* mongodb* moby* 2>/dev/null || true
-          # arch-chroot 来自 arch-install-scripts；docker 用于跑 pacstrap
+          # arch-chroot 来自 arch-install-scripts；
+          # docker 由 GitHub runner 自带（containerd.io 已装），不另装 docker.io 以避免冲突
           sudo -E apt-get -y install \
             parted e2fsprogs dosfstools btrfs-progs \
             u-boot-tools uuid-runtime openssl pigz \
             git curl wget xz-utils lz4 zstd pv jq rsync \
-            arch-install-scripts docker.io
+            arch-install-scripts
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get clean
           sudo -E timedatectl set-timezone "${TZ}"
+
+          # 验证 runner 自带 docker 可用
+          docker info >/dev/null 2>&1 || {
+            echo "::error::docker 不可用，runner 环境异常"
+            exit 1
+          }
+          echo "▶ docker 版本: $(docker --version)"
 
           # 写入运行时变量
           echo "ARCH_RELEASE=${{ inputs.arch_release || 'aarch64' }}" >> "${GITHUB_ENV}"
@@ -465,6 +473,7 @@ jobs:
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
+            ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}.sha256
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
