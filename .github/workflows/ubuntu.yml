@@ -557,8 +557,8 @@ jobs:
         uses: ncipollo/release-action@main
         if: ${{ env.PACKAGED_STATUS == 'success' && env.BUILD_ROOTFS == 'true' && !cancelled() }}
         with:
-          tag: "Ubuntu_${{ env.UBUNTU_RELEASE }}_${{ inputs.armbian_kernel }}_${{ github.run_number }}"
-          name: "Ubuntu ${{ env.UBUNTU_RELEASE }} · panther-x2 · ${{ inputs.armbian_kernel }}"
+          tag: "Ubuntu_${{ env.UBUNTU_RELEASE }}"
+          name: "Ubuntu ${{ env.UBUNTU_RELEASE }} · panther-x2"
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
@@ -592,8 +592,8 @@ jobs:
         uses: ncipollo/release-action@main
         if: ${{ env.PACKAGED_STATUS == 'success' && env.BUILD_ROOTFS == 'false' && !cancelled() }}
         with:
-          tag: "Ubuntu_${{ env.UBUNTU_RELEASE }}_${{ inputs.armbian_kernel }}_${{ github.run_number }}"
-          name: "Ubuntu ${{ env.UBUNTU_RELEASE }} · panther-x2 · ${{ inputs.armbian_kernel }}"
+          tag: "Ubuntu_${{ env.UBUNTU_RELEASE }}"
+          name: "Ubuntu ${{ env.UBUNTU_RELEASE }} · panther-x2"
           artifacts: "${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*"
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
