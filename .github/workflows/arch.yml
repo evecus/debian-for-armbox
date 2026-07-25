@@ -238,8 +238,24 @@ jobs:
           rm -f /tmp/alarm-rootfs.tar.gz
           echo "▶ 解压完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
 
-          # ── 复制 host resolv.conf 到 rootfs，确保 chroot 内能解析 DNS ──
-          sudo cp /etc/resolv.conf "${ROOTFS_DIR}/etc/resolv.conf"
+          # ── 配置 rootfs 的 resolv.conf，确保 chroot 内能解析 DNS ──
+          # host (ubuntu runner) 的 /etc/resolv.conf 通常是 systemd-resolved 的 stub
+          # (nameserver 127.0.0.53)，chroot 内没有 systemd-resolved 在跑，127.0.0.53:53 是死的，
+          # 会导致 pacman "Could not resolve host"。直接写真实公共 DNS 最稳。
+          echo "▶ host /etc/resolv.conf 内容（仅供诊断）:"
+          cat /etc/resolv.conf || true
+
+          echo "▶ 覆盖 rootfs /etc/resolv.conf → 公共 DNS..."
+          sudo tee "${ROOTFS_DIR}/etc/resolv.conf" > /dev/null << 'RESOLV_EOF'
+          nameserver 8.8.8.8
+          nameserver 8.8.4.4
+          nameserver 1.1.1.1
+          nameserver 2606:4700:4700::1111
+          RESOLV_EOF
+          sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/resolv.conf"
+
+          # 注：实际系统启动后 systemd-resolved / NetworkManager 会重写 /etc/resolv.conf，
+          # 这里的公共 DNS 只在构建期 chroot 内生效，不影响最终系统行为。
 
           # ── 覆盖 pacman.conf，每个仓库配多个 Server（pacman 自动 failover）──
           # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向）。
