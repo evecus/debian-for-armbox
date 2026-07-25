@@ -438,6 +438,37 @@ jobs:
 
           sudo mkdir -p "${ROOTFS_DIR}/usr/lib/modules"
 
+          # ── 写 /etc/os-release（rebuild 强制要求 ID= 和 VERSION_CODENAME=）─────
+          # ophub rebuild 在 mount 出 rootfs 后会从 etc/os-release 读这两个字段：
+          #   release_codeid   ← ^ID=...
+          #   release_codename ← ^VERSION_CODENAME=...
+          # 任一为空就报 "The [ etc/os-release: ... ] is invalid." 并退出。
+          # ALARM rootfs 默认 /etc/os-release 是符号链接 → /usr/lib/os-release，
+          # 且内容没有 VERSION_CODENAME（Arch 是滚动发布，无版本代号）。
+          # Debian/Ubuntu rootfs 自带 VERSION_CODENAME=bookworm/noble 所以能过。
+          # 这里写一个完整的 os-release，覆盖符号链接，满足 rebuild 检查。
+          echo "▶ 写 /etc/os-release（满足 rebuild 的 ID/VERSION_CODENAME 检查）..."
+          sudo rm -f "${ROOTFS_DIR}/etc/os-release"
+          sudo tee "${ROOTFS_DIR}/etc/os-release" > /dev/null << 'OSREL_EOF'
+          NAME="Arch Linux ARM"
+          ID=arch
+          ID_LIKE=arch
+          VERSION_CODENAME=rolling
+          VERSION_ID=rolling
+          PRETTY_NAME="Arch Linux ARM"
+          ANSI_COLOR="38;2;23;147;209"
+          HOME_URL="https://archlinuxarm.org/"
+          DOCUMENTATION_URL="https://archlinuxarm.org/wiki"
+          SUPPORT_URL="https://archlinuxarm.org/forum"
+          BUG_REPORT_URL="https://github.com/archlinuxarm/PKGBUILDs/issues"
+          OSREL_EOF
+          sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/os-release"
+          # 同步覆盖 /usr/lib/os-release（避免符号链接残留导致不一致）
+          sudo cp "${ROOTFS_DIR}/etc/os-release" "${ROOTFS_DIR}/usr/lib/os-release"
+
+          echo "▶ /etc/os-release 内容:"
+          cat "${ROOTFS_DIR}/etc/os-release"
+
           echo "▶ rootfs 完成: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
           echo "status=success" >> "${GITHUB_OUTPUT}"
 
@@ -547,7 +578,7 @@ jobs:
             -k ${KERNEL} \
             -a true \
             -t ${FSTYPE} \
-            -s 256/1024 \
+            -s 256/1624 \
             -r ophub/kernel \
             -n ${BUILDER}
 
