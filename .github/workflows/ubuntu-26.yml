@@ -531,7 +531,6 @@ jobs:
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.TARBALL_PATH }}
-            ${{ steps.package_rootfs.outputs.SHA256_PATH }}
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
