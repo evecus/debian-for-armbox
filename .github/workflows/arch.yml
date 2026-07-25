@@ -198,13 +198,18 @@ jobs:
           trap umount_chroot EXIT
 
           # ── 下载 ALARM 官方 aarch64 rootfs tarball ───────────────────
-          # 镜像优先级（按可用性排序）：
-          #   1. 清华 TUNA  — 国内最快，HTTPS 稳定
-          #   2. os.archlinuxarm.org — 官方 GeoIP 重定向（备用）
+          # GitHub runner 在国外（美东/美西），国内镜像（TUNA 等）DNS 解析不到。
+          # 用国外镜像优先，多镜像 fallback：
+          #   1. fl.us.mirror.archlinuxarm.org  — 美国迈阿密 (ALARM 官方)
+          #   2. mirror.archlinuxarm.org        — 官方 GeoIP 重定向
+          #   3. os.archlinuxarm.org            — 官方 os 子域
+          #   4. mirrors.tuna.tsinghua.edu.cn   — 清华 TUNA（备用，万一回国）
           # 注意：mirrors.kernel.org 不含 archlinuxarm 镜像（404），勿用
           ALARM_MIRRORS=(
-            "https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "https://fl.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "https://mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
             "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            "https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/os/ArchLinuxARM-aarch64-latest.tar.gz"
           )
 
           downloaded=0
@@ -236,11 +241,11 @@ jobs:
           # ── 复制 host resolv.conf 到 rootfs，确保 chroot 内能解析 DNS ──
           sudo cp /etc/resolv.conf "${ROOTFS_DIR}/etc/resolv.conf"
 
-          # ── 覆盖 pacman.conf，写死清华 TUNA 镜像 ──────────────────────
-          # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向），
-          # 但 runner 环境 DNS 解析不到该域名。sed 替换不可靠（原格式可能不含 protocol），
-          # 直接覆盖整个文件最稳。
-          echo "▶ 覆盖 /etc/pacman.conf → TUNA 镜像..."
+          # ── 覆盖 pacman.conf，每个仓库配多个 Server（pacman 自动 failover）──
+          # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向）。
+          # GitHub runner 在国外，国外镜像可达性最好。多 Server 并列让 pacman 自动切换。
+          # 顺序：美东/美西 → 官方 GeoIP → 欧洲 → 国内（兜底）
+          echo "▶ 覆盖 /etc/pacman.conf → 多国外镜像..."
           sudo tee "${ROOTFS_DIR}/etc/pacman.conf" > /dev/null << 'PACMAN_EOF'
           [options]
           Architecture = aarch64
@@ -249,15 +254,31 @@ jobs:
           HoldPkg = pacman glibc
 
           [core]
+          Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          Server = https://de.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://fr.mirror.archlinuxarm.org/$arch/$repo
           Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
 
           [extra]
+          Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          Server = https://de.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://fr.mirror.archlinuxarm.org/$arch/$repo
           Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
 
           [alarm]
+          Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          Server = https://de.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://fr.mirror.archlinuxarm.org/$arch/$repo
           Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
 
           [aur]
+          Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://mirror.archlinuxarm.org/$arch/$repo
+          Server = https://de.mirror.archlinuxarm.org/$arch/$repo
+          Server = https://fr.mirror.archlinuxarm.org/$arch/$repo
           Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
           PACMAN_EOF
           # 去掉 heredoc 缩进（上面为可读性缩进了 10 空格）
