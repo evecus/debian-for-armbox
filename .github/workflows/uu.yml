@@ -89,7 +89,7 @@ jobs:
       - name: Generate package report
         id: report
         run: |
-          set -euo pipefail
+          set -uo pipefail
           OUT_DIR="${GITHUB_WORKSPACE}/output"
           mkdir -p "${OUT_DIR}"
           REPORT="${OUT_DIR}/arch-packages-report.txt"
@@ -101,13 +101,17 @@ jobs:
             echo "===================================================="
             echo
 
-            echo "---- rootfs 总体积 ----"
-            sudo du -sh "${ROOTFS_DIR}"
+            echo "---- rootfs 总体积（已排除 proc/sys/dev/run 挂载点） ----"
+            sudo du -sh --exclude="${ROOTFS_DIR}/proc/*" \
+                         --exclude="${ROOTFS_DIR}/sys/*" \
+                         --exclude="${ROOTFS_DIR}/dev/*" \
+                         --exclude="${ROOTFS_DIR}/run/*" \
+                         "${ROOTFS_DIR}" 2>/dev/null
             echo
 
             echo "---- 全部已安装包（含依赖），按安装体积从大到小排序 ----"
-            echo "格式: 体积(KB)  包名  版本"
-            sudo chroot "${ROOTFS_DIR}" pacman -Qi | awk '
+            echo "格式: 体积  包名  版本"
+            sudo chroot "${ROOTFS_DIR}" pacman -Qi 2>/dev/null | awk '
               /^Name/{name=$3}
               /^Version/{ver=$3}
               /^Installed Size/{
@@ -118,11 +122,11 @@ jobs:
             echo
 
             echo "---- 显式安装的包（非依赖，即 base/base-devel 等组直接拉入的） ----"
-            sudo chroot "${ROOTFS_DIR}" pacman -Qe
+            sudo chroot "${ROOTFS_DIR}" pacman -Qe 2>/dev/null || echo "(查询失败)"
             echo
 
             echo "---- 作为依赖被安装的包 ----"
-            sudo chroot "${ROOTFS_DIR}" pacman -Qd
+            sudo chroot "${ROOTFS_DIR}" pacman -Qd 2>/dev/null || echo "(查询失败)"
             echo
 
             echo "---- 已安装的 group（如 base、base-devel）----"
@@ -135,8 +139,12 @@ jobs:
             sudo du -h --max-depth=3 "${ROOTFS_DIR}/usr" 2>/dev/null | sort -rh | head -30
             echo
 
-            echo "---- rootfs 根目录体积构成 ----"
-            sudo du -h --max-depth=1 "${ROOTFS_DIR}" 2>/dev/null | sort -rh
+            echo "---- rootfs 根目录体积构成（已排除 proc/sys/dev/run 挂载点） ----"
+            sudo du -h --max-depth=1 --exclude="${ROOTFS_DIR}/proc/*" \
+                                      --exclude="${ROOTFS_DIR}/sys/*" \
+                                      --exclude="${ROOTFS_DIR}/dev/*" \
+                                      --exclude="${ROOTFS_DIR}/run/*" \
+                                      "${ROOTFS_DIR}" 2>/dev/null | sort -rh
           } | tee "${REPORT}"
 
           echo "▶ 报告已生成: ${REPORT}"
