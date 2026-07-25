@@ -391,9 +391,8 @@ jobs:
             # 内核来自 ophub tarball，这份用不上
             echo '  → 卸载内核包...'
             pacman -Rns --noconfirm \
-              linux-aarch64 \
-              linux-api-headers
-            verify_removed linux-aarch64 linux-api-headers
+              linux-aarch64
+            verify_removed linux-aarch64
 
             # ── 网络管理：ALARM 默认装的是 netctl + dhcpcd，实际用 NetworkManager ──
             # netctl/dhcpcd 是 explicit 安装的包，确认存在，卸掉换成后面装的 networkmanager
@@ -829,7 +828,7 @@ jobs:
           sudo chmod +x "${REBUILD_DIR}/rebuild"
           cd "${REBUILD_DIR}"
 
-          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1280 -r ophub/kernel -n ${BUILDER}"
+          echo "▶ 执行: sudo ./rebuild -b ${BOARD} -k ${KERNEL} -a true -t ${FSTYPE} -s 256/1024 -r ophub/kernel -n ${BUILDER}"
           sudo ./rebuild \
             -b ${BOARD} \
             -k ${KERNEL} \
