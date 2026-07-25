@@ -236,11 +236,35 @@ jobs:
           # ── 复制 host resolv.conf 到 rootfs，确保 chroot 内能解析 DNS ──
           sudo cp /etc/resolv.conf "${ROOTFS_DIR}/etc/resolv.conf"
 
-          # ALARM rootfs 自带 /etc/pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向），
-          # 改为清华 TUNA 镜像（已验证稳定）
-          sudo sed -i \
-            's|https://mirror.archlinuxarm.org|https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm|g; s|http://mirror.archlinuxarm.org|https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm|g' \
-            "${ROOTFS_DIR}/etc/pacman.conf"
+          # ── 覆盖 pacman.conf，写死清华 TUNA 镜像 ──────────────────────
+          # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向），
+          # 但 runner 环境 DNS 解析不到该域名。sed 替换不可靠（原格式可能不含 protocol），
+          # 直接覆盖整个文件最稳。
+          echo "▶ 覆盖 /etc/pacman.conf → TUNA 镜像..."
+          sudo tee "${ROOTFS_DIR}/etc/pacman.conf" > /dev/null << 'PACMAN_EOF'
+          [options]
+          Architecture = aarch64
+          SigLevel = Required DatabaseOptional
+          LocalFileSigLevel = Optional
+          HoldPkg = pacman glibc
+
+          [core]
+          Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
+
+          [extra]
+          Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
+
+          [alarm]
+          Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
+
+          [aur]
+          Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
+          PACMAN_EOF
+          # 去掉 heredoc 缩进（上面为可读性缩进了 10 空格）
+          sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/pacman.conf"
+
+          echo "▶ pacman.conf 内容:"
+          grep -E '^(Server|Architecture|\[)' "${ROOTFS_DIR}/etc/pacman.conf"
 
           # ── 初始化 keyring + 装基础包 ────────────────────────────────
           # 不装 linux 内核包（内核来自 ophub tarball）
