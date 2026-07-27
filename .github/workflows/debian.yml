@@ -1,10 +1,3 @@
-#==========================================================================
-# 用途：构建 panther-x2 (RK3566) Debian 固件
-#
-# 两种模式（自动判断）：
-#   A. 填写 rootfs_url → 直接用现有 rootfs 执行 rebuild（快，约 5 分钟）
-#   B. 不填 rootfs_url → 先构建 rootfs 再 rebuild，同时发布 rootfs + 固件
-#==========================================================================
 name: Build Debian
 
 on:
@@ -62,15 +55,6 @@ on:
           - Asia/Shanghai
           - UTC
 
-      extra_packages:
-        description: "额外安装的包，空格分隔（仅自建 rootfs 时生效）"
-        required: false
-        default: ""
-
-      builder_name:
-        description: "构建者签名"
-        required: false
-        default: "mybuilder"
 
 env:
   TZ: UTC
@@ -186,8 +170,7 @@ jobs:
 
             apt-get install -y \
               openssh-server sudo curl wget ca-certificates \
-              locales tzdata \
-              iproute2 network-manager \
+              locales tzdata iproute2 \
               net-tools iputils-ping dnsutils \
               wireless-tools chrony bc \
               bash-completion htop nano nftables \
@@ -200,23 +183,12 @@ jobs:
             apt-get install systemd-resolved -y --no-install-recommends
 
             # 验证关键包
-            dpkg -l openssh-server network-manager rsync | grep -c '^ii' | grep -q '^3$' || {
+            dpkg -l openssh-server rsync | grep -c '^ii' | grep -q '^3$' || {
               echo 'ERROR: 关键包安装不完整'
               exit 1
             }
             apt-get clean && rm -rf /var/lib/apt/lists/*
           "
-
-          # ── 额外包 ────────────────────────────────────────────────────
-          if [[ -n "${EXTRA_PKGS}" ]]; then
-            echo "▶ 安装额外包: ${EXTRA_PKGS}"
-            sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update -qq
-              apt-get install -y ${EXTRA_PKGS} --no-install-recommends
-              apt-get clean && rm -rf /var/lib/apt/lists/*
-            "
-          fi
 
           # ── 时区 / locale / hostname ──────────────────────────────────
           sudo chroot "${ROOTFS_DIR}" ln -sf "/usr/share/zoneinfo/${TZ_VAL}" /etc/localtime
@@ -243,12 +215,6 @@ jobs:
           ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
           sudo sed -i "s|^root:[^:]*|root:${ROOT_HASH}|" "${ROOTFS_DIR}/etc/shadow"
 
-          # ── 网络 ──────────────────────────────────────────────────────
-          sudo mkdir -p "${ROOTFS_DIR}/etc/NetworkManager"
-          echo 'W21haW5dCnBsdWdpbnM9aWZ1cGRvd24sa2V5ZmlsZQpkaGNwPWludGVybmFsCltpZnVwZG93bl0KbWFuYWdlZD10cnVlCg==' \
-            | base64 -d | sudo tee "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf" > /dev/null
-          printf 'auto lo\niface lo inet loopback\n' \
-            | sudo tee "${ROOTFS_DIR}/etc/network/interfaces" > /dev/null
 
           # ── systemd 超时 ──────────────────────────────────────────────
           SYS_CONF="${ROOTFS_DIR}/etc/systemd/system.conf"
@@ -292,14 +258,14 @@ jobs:
                    systemd/debian-zram-config.service; do
             sudo cp "${f}" "${ROOTFS_DIR}/lib/systemd/system/"
           done
+          sudo cp common/20-eth0.network "${ROOTFS_DIR}/etc/systemd/network/20-eth0.network"
 
           # ── enable 服务 ───────────────────────────────────────────────
           sudo chroot "${ROOTFS_DIR}" systemctl enable ssh
-          sudo chroot "${ROOTFS_DIR}" systemctl enable NetworkManager
-          sudo chroot "${ROOTFS_DIR}" systemctl enable NetworkManager-dispatcher
           sudo chroot "${ROOTFS_DIR}" systemctl enable chrony
           sudo chroot "${ROOTFS_DIR}" systemctl enable nftables         2>/dev/null || true
           sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-resolved
+          sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-networkd
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-firstrun.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-ramlog.service
           sudo chroot "${ROOTFS_DIR}" systemctl enable debian-hardware-optimize.service
