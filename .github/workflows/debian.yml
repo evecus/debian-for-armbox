@@ -412,7 +412,7 @@ jobs:
             -t ${FSTYPE} \
             -s 256/1024 \
             -r ophub/kernel \
-            -n ${BUILDER}
+            -n debian
 
           OUTPUT_DIR="${REBUILD_DIR}/build/output/images"
           ls -lh "${OUTPUT_DIR}/"
