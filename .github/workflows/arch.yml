@@ -237,13 +237,6 @@ jobs:
           RESOLV_EOF
           sudo sed -i 's/^[[:space:]]*//' "${ROOTFS_DIR}/etc/resolv.conf"
 
-          # 注：实际系统启动后 systemd-resolved / NetworkManager 会重写 /etc/resolv.conf，
-          # 这里的公共 DNS 只在构建期 chroot 内生效，不影响最终系统行为。
-
-          # ── 覆盖 pacman.conf，每个仓库配多个 Server（pacman 自动 failover）──
-          # ALARM rootfs 自带的 pacman.conf 指向 mirror.archlinuxarm.org（GeoIP 重定向）。
-          # GitHub runner 在国外，国外镜像可达性最好。多 Server 并列让 pacman 自动切换。
-          # 顺序：美东/美西 → 官方 GeoIP → 欧洲 → 国内（兜底）
           echo "▶ 覆盖 /etc/pacman.conf → 多国外镜像..."
           sudo tee "${ROOTFS_DIR}/etc/pacman.conf" > /dev/null << 'PACMAN_EOF'
           [options]
@@ -357,8 +350,7 @@ jobs:
             set -e
             pacman -Sy --noconfirm --needed \
               openssh sudo curl wget ca-certificates tzdata \
-              iproute2 networkmanager \
-              net-tools iputils bind \
+              net-tools iputils bind iproute2 \
               wireless_tools wpa_supplicant wireless-regdb \
               bash-completion htop nano nftables bc \
               uboot-tools parted \
@@ -366,9 +358,6 @@ jobs:
               lsof file procps-ng cronie \
               rsync logrotate
 
-            # 验证关键包
-            for p in openssh networkmanager rsync; do
-              pacman -Qi \${p} >/dev/null 2>&1 || { echo \"ERROR: 关键包 \${p} 安装失败\"; exit 1; }
             done
           "
 
@@ -452,15 +441,6 @@ jobs:
           # ── root 密码 ─────────────────────────────────────────────────
           ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
           sudo sed -i "s|^root:[^:]*|root:${ROOT_HASH}|" "${ROOTFS_DIR}/etc/shadow"
-          
-          sudo mkdir -p "${ROOTFS_DIR}/etc/NetworkManager"
-          sudo tee "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf" > /dev/null << 'NM_EOF'
-          [main]
-          plugins=keyfile
-          dhcp=internal
-          [keyfile]
-          unmanaged-devices=none
-          NM_EOF
 
           # ── systemd 超时 ──────────────────────────────────────────────
           SYS_CONF="${ROOTFS_DIR}/etc/systemd/system.conf"
@@ -503,10 +483,9 @@ jobs:
           # ── enable 服务（在 chroot 内用 systemctl，需要 proc/sys/dev 已 mount）──
           sudo chroot "${ROOTFS_DIR}" /bin/bash -c "
             systemctl enable sshd
-            systemctl enable NetworkManager
-            systemctl enable NetworkManager-dispatcher
             systemctl enable systemd-timesyncd
             systemctl enable nftables               2>/dev/null || true
+            systemctl enable systemd-networkd       2>/dev/null || true
             systemctl enable arch-firstrun.service
             systemctl enable arch-ramlog.service
             systemctl enable arch-hardware-optimize.service
@@ -516,9 +495,7 @@ jobs:
             # disable 不需要的服务
             systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
             systemctl disable systemd-pstore.service             2>/dev/null || true
-            systemctl disable systemd-networkd.service           2>/dev/null || true
             systemctl disable systemd-networkd-wait-online.service 2>/dev/null || true
-            systemctl mask   systemd-networkd.service            2>/dev/null || true
           "
 
           # ── 卸载 chroot 挂载点 ────────────────────────────────────────
@@ -586,7 +563,9 @@ jobs:
 
           echo "▶ /etc/os-release 内容:"
           cat "${ROOTFS_DIR}/etc/os-release"
-
+          sudo rm "${ROOTFS_DIR}/etc/resolv.conf"
+          sudo touch "${ROOTFS_DIR}/etc/resolv.conf"
+          
           echo "▶ rootfs 最终大小: $(sudo du -sh ${ROOTFS_DIR} | awk '{print $1}')"
           echo "status=success" >> "${GITHUB_OUTPUT}"
 
