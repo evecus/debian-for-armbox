@@ -357,8 +357,6 @@ jobs:
               btrfs-progs e2fsprogs dosfstools \
               lsof file procps-ng cronie \
               rsync logrotate
-
-            done
           "
 
           echo "▶ 执行 pacman -Syu 全量更新..."
