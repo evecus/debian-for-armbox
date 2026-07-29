@@ -274,8 +274,6 @@ jobs:
           tag: "Debian_${{ inputs.debian_release }}_${{ inputs.armbian_kernel }}_${{ github.run_number }}"
           name: "Debian ${{ inputs.debian_release }} · panther-x2 · ${{ inputs.armbian_kernel }}"
           artifacts: |
-            ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
-            ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}.sha256
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
