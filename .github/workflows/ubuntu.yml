@@ -306,6 +306,8 @@ jobs:
           # jammy: systemd-resolved 内嵌于 systemd 包，单元文件已存在
           # noble: systemd-resolved 作为独立包安装
           sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-resolved.service
+          sudo cp common/20-eth0.network "${ROOTFS_DIR}/etc/systemd/network/20-eth0.network"
+
 
           # ── Ubuntu 特有：禁用 snapd / unattended-upgrades ────────────
           sudo chroot "${ROOTFS_DIR}" bash -c "
