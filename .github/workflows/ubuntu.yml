@@ -221,7 +221,7 @@ jobs:
               apt-get install -y \
                 openssh-server sudo curl wget ca-certificates \
                 locales tzdata fdisk \
-                iproute2 netplan.io \
+                iproute2 network-manager netplan.io \
                 net-tools iputils-ping dnsutils \
                 wireless-tools chrony \
                 bash-completion htop nano nftables bc \
@@ -246,7 +246,7 @@ jobs:
               apt-get install -y \
                 openssh-server sudo curl wget ca-certificates \
                 locales tzdata fdisk \
-                iproute2 netplan.io \
+                iproute2 network-manager netplan.io \
                 net-tools iputils-ping dnsutils \
                 wireless-tools chrony \
                 bash-completion htop nano nftables bc \
@@ -257,6 +257,12 @@ jobs:
                 --no-install-recommends
               apt-get install -y wpasupplicant
               apt-get install -y systemd-resolved --no-install-recommends
+
+              # 验证关键包
+              dpkg -l openssh-server network-manager rsync | grep -c '^ii' | grep -q '^3$' || {
+                echo 'ERROR: 关键包安装不完整'
+                exit 1
+              }
               apt-get clean && rm -rf /var/lib/apt/lists/*
             "
           fi
@@ -296,9 +302,18 @@ jobs:
           ROOT_HASH="$(openssl passwd -6 "${ROOT_PASSWORD}")"
           sudo sed -i "s|^root:[^:]*|root:${ROOT_HASH}|" "${ROOTFS_DIR}/etc/shadow"
 
+          # ── 网络（NetworkManager + netplan）──────────────────────────
+          sudo mkdir -p "${ROOTFS_DIR}/etc/NetworkManager"
+          echo 'W21haW5dCnBsdWdpbnM9aWZ1cGRvd24sa2V5ZmlsZQpkaGNwPWludGVybmFsCltpZnVwZG93bl0KbWFuYWdlZD10cnVlCg==' \
+            | base64 -d | sudo tee "${ROOTFS_DIR}/etc/NetworkManager/NetworkManager.conf" > /dev/null
+          sudo mkdir -p "${ROOTFS_DIR}/etc/netplan"
+          sudo cp ubuntu/01-nm-all.yaml "${ROOTFS_DIR}/etc/netplan/01-nm-all.yaml"
+          sudo chmod 600 "${ROOTFS_DIR}/etc/netplan/01-nm-all.yaml"
+
           # ── enable 服务 ───────────────────────────────────────────────
           sudo chroot "${ROOTFS_DIR}" systemctl enable ssh
-          sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-networkd
+          sudo chroot "${ROOTFS_DIR}" systemctl enable NetworkManager
+          sudo chroot "${ROOTFS_DIR}" systemctl enable NetworkManager-dispatcher
           sudo chroot "${ROOTFS_DIR}" systemctl enable chrony
           sudo chroot "${ROOTFS_DIR}" systemctl enable nftables 2>/dev/null || true
 
@@ -306,8 +321,6 @@ jobs:
           # jammy: systemd-resolved 内嵌于 systemd 包，单元文件已存在
           # noble: systemd-resolved 作为独立包安装
           sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-resolved.service
-          sudo cp common/20-eth0.network "${ROOTFS_DIR}/etc/systemd/network/20-eth0.network"
-
 
           # ── Ubuntu 特有：禁用 snapd / unattended-upgrades ────────────
           sudo chroot "${ROOTFS_DIR}" bash -c "
@@ -549,6 +562,7 @@ jobs:
           artifacts: |
             ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz*
             ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}
+            ${{ steps.package_rootfs.outputs.OUT_DIR }}/${{ steps.package_rootfs.outputs.TARBALL }}.sha256
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
