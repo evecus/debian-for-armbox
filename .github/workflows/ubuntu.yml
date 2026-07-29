@@ -298,7 +298,7 @@ jobs:
 
           # ── enable 服务 ───────────────────────────────────────────────
           sudo chroot "${ROOTFS_DIR}" systemctl enable ssh
-          sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-networked
+          sudo chroot "${ROOTFS_DIR}" systemctl enable systemd-networkd
           sudo chroot "${ROOTFS_DIR}" systemctl enable chrony
           sudo chroot "${ROOTFS_DIR}" systemctl enable nftables 2>/dev/null || true
 
